@@ -10,6 +10,50 @@ El objetivo es replicar el flujo que npm/JS/TS tienen nativo (`npm version`, `np
 
 ---
 
+## 0. Convencion de naming de repos (NOVA-SEMVER-31)
+
+**Regla:** el nombre del repo refleja la **tecnologia objetivo** del artefacto, no el lenguaje. Esto permite que el meta-framework crezca para incluir implementaciones sobre otros frameworks (Quarkus, Micronaut, etc.) sin renombrar nada.
+
+**Patron general:** `nova-<lenguaje>-<rol>` o `nova-<lenguaje>-<rol>-<framework>`
+
+| Tipo de artefacto | Framework-coupled? | Patron | Ejemplo |
+|---|---|---|---|
+| **Lib pura** (framework-agnostic) | No | `nova-java-<rol>` | `nova-java-mask-utils` |
+| **Starter / Extension** | Si (Spring Boot) | `nova-java-<rol>-spring-boot-<tipo>` | `nova-java-commons-spring-boot-starter` |
+| **Gradle plugin** | Si (Spring Boot) | `nova-java-spring-boot-gradle-plugin` | `nova-java-spring-boot-gradle-plugin` |
+| **Maven plugin / archetype / parent** | Si (Spring Boot) | `nova-java-spring-boot-<rol>` | `nova-java-spring-boot-parent` |
+| **BOM** | No | `nova-bom` (sin sufijo de lenguaje) | `nova-bom` |
+| **Instance / demo** | No (es instancia, no artefacto) | `nova-java-<rol>` | `nova-java-example` |
+| **Infraestructura compartida** | No | `nova-<rol>` | `nova-devops`, `nova-infrastructure` |
+
+**Reglas especificas:**
+
+1. **Libs puras no llevan framework en el nombre** — son reutilizables en cualquier contexto. Si una lib se acopla a un framework especifico, se renombra a `nova-java-<rol>-<framework>-<tipo>`.
+2. **Starters y extensiones SIEMPRE llevan el framework** — un starter de Quarkus se llamaria `nova-java-<rol>-quarkus-extension` (siguiendo la convencion de Quarkus), NO `nova-java-<rol>`.
+3. **Meta-starters** (que agregan varios starters) llevan el framework: `nova-java-spring-boot-starter` es el meta-starter de Spring Boot.
+4. **Plugin Gradle** lleva el framework objetivo, no el lenguaje del plugin: `nova-java-spring-boot-gradle-plugin` (es un plugin para proyectos Spring Boot).
+5. **Archetype y parent** llevan el framework porque el parent POM de Spring Boot es especifico: `nova-java-spring-boot-parent`, `nova-java-spring-boot-archetype`.
+
+**Namespace Maven** (no cambia con el rename del repo):
+
+| Tipo | Namespace | Ejemplo |
+|---|---|---|
+| Libs | `pe.edu.nova.java.libs` | `pe.edu.nova.java.libs:nova-java-mask-utils` |
+| Starters | `pe.edu.nova.java.starters` | `pe.edu.nova.java.starters:nova-java-commons-spring-boot-starter` |
+| Plugin Gradle | `pe.edu.nova.java.spring-boot` (id) | id del plugin: `pe.edu.nova.java.spring-boot` |
+
+**Regla de correspondencia:** la primera parte del repo name (despues de `nova-java-`) y el artifactId Maven coinciden. Ejemplos:
+
+| Repo | ArtifactId Maven | GroupId |
+|---|---|---|
+| `nova-java-mask-utils` | `nova-java-mask-utils` | `pe.edu.nova.java.libs` |
+| `nova-java-commons-spring-boot-starter` | `nova-java-commons-spring-boot-starter` | `pe.edu.nova.java.starters` |
+| `nova-java-spring-boot-gradle-plugin` | `nova-java-spring-boot-gradle-plugin` | `pe.edu.nova.java.spring-boot` |
+
+> **Justificacion de la correccion (2026-07-09):** la primera iteracion del rename removió `spring-boot` de TODOS los repos. Esto fue un error: los starters y plugins SI estan acoplados a Spring Boot y deben declararlo. Si manana se agrega `nova-java-quarkus-extension`, se aplicara la misma convencion (Quarkus en el nombre, no en el groupId). El rename es **por tecnologia objetivo**, no por simplificacion.
+
+---
+
 ## 1. El problema conceptual
 
 ### En JS/TS
@@ -1173,12 +1217,12 @@ main
 | Nivel | Componente | Como se versiona |
 |---|---|---|
 | 1 (libs puras) | `nova-java-mask-utils`, `nova-java-date-utils`, etc. | Independiente. Cada una sigue semver estricto. Se bump-an en su propio PR de release. |
-| 2 (starters) | `nova-java-commons-starter`, etc. | Heredan del BOM. Bump coordinado cuando cambia el BOM. |
-| 3 (meta-starter) | `nova-java-starter` | Versionado junto al BOM. |
+| 2 (starters) | `nova-java-commons-spring-boot-starter`, etc. | Heredan del BOM. Bump coordinado cuando cambia el BOM. |
+| 3 (meta-starter) | `nova-java-spring-boot-starter` | Versionado junto al BOM. |
 | 4 (BOM) | `nova-bom` | **Coordinador.** `0.x.0` indica alineacion de todo el stack. |
-| 4 (Parent) | `nova-java-parent` | Versionado junto al BOM. |
-| 5 (Archetype) | `nova-java-archetype` | Independiente (es scaffolding, no API). |
-| 5 (Gradle Plugin) | `nova-java-gradle-plugin` | Independiente. |
+| 4 (Parent) | `nova-java-spring-boot-parent` | Versionado junto al BOM. |
+| 5 (Archetype) | `nova-java-spring-boot-archetype` | Independiente (es scaffolding, no API). |
+| 5 (Gradle Plugin) | `nova-java-spring-boot-gradle-plugin` | Independiente. |
 | Multi-stack | `nova-devops`, `nova-infrastructure` | Independiente. |
 
 ### 8.4. Configuracion concreta por modulo
@@ -1187,8 +1231,8 @@ main
 > - Los repos ya usan `groupId = "pe.edu.nova.java.*"` (migrado en NOVA-SEMVER-00b). ✅
 > - Todos los repos Gradle tienen `gradle.properties` con `version` y `group`. ✅
 > - Todos los repos Gradle tienen `net.nemerosa.versioning` 4.0.1. ✅ (NOVA-SEMVER-03)
-> - `nova-java-mask-utils`, `nova-java-observability-utils` y `nova-java-starter` fueron **migrados de Maven a Gradle** para cumplir la convencion. ✅
-> - Solo **3 repos permanecen en Maven** por estandar de la industria: `nova-bom` (BOM), `nova-java-parent` (Parent POM), `nova-java-archetype` (Maven archetype).
+> - `nova-java-mask-utils`, `nova-java-observability-utils` y `nova-java-spring-boot-starter` fueron **migrados de Maven a Gradle** para cumplir la convencion. ✅
+> - Solo **3 repos permanecen en Maven** por estandar de la industria: `nova-bom` (BOM), `nova-java-spring-boot-parent` (Parent POM), `nova-java-spring-boot-archetype` (Maven archetype).
 
 #### Para librerias puras (Nivel 1) — ejemplo: `build.gradle.kts`
 
@@ -1262,7 +1306,7 @@ publishing {
 }
 ```
 
-#### Para starters (Nivel 2) — `nova-java-commons-starter/build.gradle.kts`
+#### Para starters (Nivel 2) — `nova-java-commons-spring-boot-starter/build.gradle.kts`
 
 ```kotlin
 plugins {
@@ -1311,7 +1355,7 @@ version = versioning.info.display
 </dependencyManagement>
 ```
 
-#### Para el Gradle Plugin (Nivel 5) — `nova-java-gradle-plugin/build.gradle.kts`
+#### Para el Gradle Plugin (Nivel 5) — `nova-java-spring-boot-gradle-plugin/build.gradle.kts`
 
 ```kotlin
 plugins {
@@ -1438,10 +1482,10 @@ Como Nova Platform tiene **15 repos Java independientes** (10 Gradle + 3 Maven +
 
 #### 8.6.2. Formato multi-package (para repos multi-modulo como `commons-starter`)
 
-`nova-java-commons-starter` es multi-modulo (root + 2 submodulos). `release-please` permite configurar multiples paquetes en un solo `.release-please-config.json`:
+`nova-java-commons-spring-boot-starter` es multi-modulo (root + 2 submodulos). `release-please` permite configurar multiples paquetes en un solo `.release-please-config.json`:
 
 ```json
-// .release-please-config.json (ejemplo real: nova-java-commons-starter)
+// .release-please-config.json (ejemplo real: nova-java-commons-spring-boot-starter)
 {
   "packages": {
     ".": {
@@ -1473,7 +1517,7 @@ Como Nova Platform tiene **15 repos Java independientes** (10 Gradle + 3 Maven +
 ```
 
 ```json
-// .release-please-manifest.json (ejemplo real: nova-java-commons-starter)
+// .release-please-manifest.json (ejemplo real: nova-java-commons-spring-boot-starter)
 {
   ".": "0.1.0",
   "nova-api-standard-starter": "0.1.0",
@@ -2671,18 +2715,18 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | 1 | `nova-devops` | No-build (CI/CD) | — | — | — | — | — |
 | 2 | `nova-infrastructure` | No-build (IaC) | — | — | — | — | — |
 | 3 | `nova-bom` | Maven (BOM) | — | — | — | — | — |
-| 4 | `nova-java-parent` | Maven (Parent POM) | — | — | — | — | — |
-| 5 | `nova-java-archetype` | Maven (Archetype) | — | — | — | — | — |
+| 4 | `nova-java-spring-boot-parent` | Maven (Parent POM) | — | — | — | — | — |
+| 5 | `nova-java-spring-boot-archetype` | Maven (Archetype) | — | — | — | — | — |
 | 6 | `nova-java-api-standard` | Gradle | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
-| 7 | `nova-java-commons-starter` | Gradle (multi-modulo: root + 2 submodules) | 9.2.0 | ✅ | ❌ root / ✅ 2 submodules | ✅ | ❌ root / ✅ 2 submodules |
+| 7 | `nova-java-commons-spring-boot-starter` | Gradle (multi-modulo: root + 2 submodules) | 9.2.0 | ✅ | ❌ root / ✅ 2 submodules | ✅ | ❌ root / ✅ 2 submodules |
 | 8 | `nova-java-date-utils` | Gradle | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
 | 9 | `nova-java-example` | Gradle | 9.2.0 | ✅ | ❌ (esperado) | ✅ | ❌ (no publica) |
-| 10 | `nova-java-gradle-plugin` | Gradle | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
+| 10 | `nova-java-spring-boot-gradle-plugin` | Gradle | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
 | 11 | `nova-java-mapper-utils` | Gradle | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
 | 12 | `nova-java-mask-utils` | Gradle (migrado de Maven) | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
-| 13 | `nova-java-observability-starter` | Gradle | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
+| 13 | `nova-java-observability-spring-boot-starter` | Gradle | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
 | 14 | `nova-java-observability-utils` | Gradle (migrado de Maven) | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
-| 15 | `nova-java-starter` | Gradle (migrado de Maven) | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
+| 15 | `nova-java-spring-boot-starter` | Gradle (migrado de Maven) | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
 
 **Resumen:** 9 repos Gradle simples + 1 multi-modulo (commons-starter con root + 2 submodules) + 3 Maven-only + 2 no-build = **15 repos Java totales**.
 
