@@ -52,6 +52,49 @@ El objetivo es replicar el flujo que npm/JS/TS tienen nativo (`npm version`, `np
 
 > **Justificacion de la correccion (2026-07-09):** la primera iteracion del rename removió `spring-boot` de TODOS los repos. Esto fue un error: los starters y plugins SI estan acoplados a Spring Boot y deben declararlo. Si manana se agrega `nova-java-quarkus-extension`, se aplicara la misma convencion (Quarkus en el nombre, no en el groupId). El rename es **por tecnologia objetivo**, no por simplificacion.
 
+### 0.1. Arbol de decision: ¿este repo lleva "spring-boot" en el nombre?
+
+```
+                        ┌──────────────────────────┐
+                        │ ¿Que tipo de artefacto?  │
+                        └──────────┬───────────────┘
+                                   │
+        ┌──────────────┬───────────┼───────────┬──────────────┐
+        │              │           │           │              │
+        ▼              ▼           ▼           ▼              ▼
+      Lib           Starter     Plugin       Parent /        Infra /
+     pura         / Extension   Gradle     Archetype         BOM
+        │              │           │           │              │
+        │              │           │           │              │
+   ¿Usa Spring? ─Y─►  (forzar framework en el nombre)
+        │              │           │           │
+        N              ▼           ▼           ▼
+        │         ┌────────────────────────────────────┐
+        │         │ SIEMPRE llevan el framework:       │
+        │         │   -X-spring-boot-starter           │
+        │         │   -X-spring-boot-gradle-plugin     │
+        │         │   -X-spring-boot-archetype         │
+        │         │   -X-spring-boot-parent            │
+        │         └────────────────────────────────────┘
+        ▼
+  ┌──────────────────────┐
+  │  NO llevan framework: │
+  │    nova-java-<rol>   │
+  │  (lib reutilizable,  │
+  │   cualquier stack)   │
+  └──────────────────────┘
+```
+
+**Test rapido para developers:**
+
+1. ¿La clase extiende `org.springframework...` o usa `@SpringBootApplication`? → SI → `spring-boot` en el nombre.
+2. ¿Es un `MavenPublication` que importa Spring Boot como `api`/`implementation`? → SI → `spring-boot` en el nombre.
+3. ¿Es un parent POM o archetype que hereda de `spring-boot-starter-parent`? → SI → `spring-boot` en el nombre.
+4. ¿Es un plugin Gradle con tasks que configuran `JavaPlugin` + `SpringBootPlugin`? → SI → `spring-boot` en el nombre.
+5. ¿Solo importa `jakarta.validation`, `slf4j`, `commons-lang3`? → NO → `nova-java-<rol>` sin framework.
+
+> **Regla de oro:** si tienes duda, **incluye el framework en el nombre**. Es mas facil remover `spring-boot` de un nombre que descubrir dos anos despues que una lib "neutra" tiene dependencias acopladas.
+
 ---
 
 ## 1. El problema conceptual
@@ -129,6 +172,8 @@ Antes de hablar de semver hay que decidir **donde se publican los artefactos**. 
 #### 3.1.1. Visibilidad configurable: publica o privada
 
 **Decision para Nova Platform:** la visibilidad del paquete en GitHub Packages es **parametrizable por repo** via una variable de configuracion en el repositorio (Settings → Variables → Actions). Por defecto es **publica**.
+
+> **Nota sobre nomenclatura:** el `groupId` Maven (`pe.edu.nova.java.libs`, `pe.edu.nova.java.starters`, `pe.edu.nova.java.spring-boot`) se deriva de la convencion de naming de repos documentada en §0. Renombrar un repo NO cambia su `groupId`; ver §10.4 para los detalles.
 
 **Por que parametrizable:**
 
@@ -494,6 +539,29 @@ Estos NO son reusable workflows sino plantillas invocables directamente desde ca
 | `reusable-version-bump-gradle.yml` | **Deprecado** post-NOVA-SEMVER-13. Mismo motivo. |
 
 > **Razon de la deprecacion:** ambos workflows tenian un bug critico — su regex de extraccion de version (`grep '^version' build.gradle.kts`) no parseaba el patron moderno `version = findProperty("version") as String` introducido en Sprint 0 (NOVA-SEMVER-04). El resultado era que el job `bump` siempre fallaba con "No jobs were run" o generaba un PR vacio. La migracion a `release-please` (NOVA-SEMVER-13) elimina esta clase de problemas porque la fuente de verdad de la version pasa a ser el tag `vX.Y.Z`, no un regex sobre el build file.
+
+#### 5.0.7. Workaround: `publish-on-tag.yml` con logica inlined (NOVA-SEMVER-15)
+
+> **Limitacion conocida de GitHub Actions** (no es bug de Nova Platform): cuando un workflow tag-triggered (`on: push: tags: v*`) invoca una reusable workflow via `uses:`, GitHub Actions falla silenciosamente con 0 jobs y `referenced_workflows: {}`. Ver §11.7.5 para la causa raiz y la teoria probada.
+
+**Estado actual (2026-07-09):** los 8 `publish-on-tag.yml` en los repos Gradle **NO invocan** la reusable `reusable-release-publish.yml` (#18 en §5.0.4). En su lugar, **inlined** la logica completa (~70 lineas) directamente en cada workflow.
+
+**Implicaciones:**
+
+- La reusable #18 se mantiene en `nova-devops` como **referencia historica** y para cuando GitHub resuelva el bug.
+- Cualquier cambio en la logica de publish requiere editar **8 archivos** en vez de 1.
+- Trade-off aceptado: simplicidad operativa (los 8 archivos son casi identicos) > DRY.
+
+**Como identificar si un repo usa el workaround:**
+
+```bash
+# En cualquier repo Gradle:
+grep -l "ahincho/nova-devops.*reusable-release-publish" .github/workflows/publish-on-tag.yml
+# Salida vacia = workaround inlined activo (estado correcto actual)
+# Salida con el path = reusable funcionando (estado ideal, pendiente bug fix GitHub)
+```
+
+**Cuando se resuelva el bug de GitHub Actions** (reportado, esperando respuesta de GitHub Support), la migracion es: copiar la logica de los 8 `publish-on-tag.yml` de vuelta a la reusable #18 y reemplazar el contenido inlined por `uses: ahincho/nova-devops/.github/workflows/reusable-release-publish.yml@main`. NO requiere cambios de logica, solo de organizacion.
 
 ### 5.1. Análisis de gaps (actualizado 2026-07-09)
 
@@ -1527,6 +1595,33 @@ Como Nova Platform tiene **15 repos Java independientes** (10 Gradle + 3 Maven +
 
 > **Convencion adoptada:** los 3 paquetes de commons-starter comparten la misma version `0.1.0` (single release, no multi-package independent versions). Si en el futuro se necesita independencia, cada paquete tendra su propio `release-type` y rango de bump independiente.
 
+**Estructura del repo multi-modulo `commons-starter` (referencia para futuros repos multi-paquete):**
+
+```
+nova-java-commons-spring-boot-starter/
+├── .release-please-config.json         # 3 packages: "." + 2 submodules
+├── .release-please-manifest.json       # 3 versiones sincronizadas
+├── build.gradle.kts                    # root: NO publica (no maven-publish)
+├── settings.gradle.kts                 # include(":nova-api-standard-starter", ":nova-mask-starter")
+├── nova-api-standard-starter/
+│   ├── build.gradle.kts                # SI publica (pe.edu.nova.java.starters:nova-api-standard-starter)
+│   └── src/...
+└── nova-mask-starter/
+    ├── build.gradle.kts                # SI publica (pe.edu.nova.java.starters:nova-mask-starter)
+    └── src/...
+```
+
+**Nota sobre el root NO-publicable:** el `build.gradle.kts` raiz de `commons-starter` no tiene `maven-publish` porque el root no es un artefacto publicable, solo un agregador. `release-please` aun lo incluye en la lista de packages (con `package-name: pe.edu.nova.java.starters:nova-commons-starter`) para que su CHANGELOG refleje cambios que afectan a los submodulos (ej: bump de `gradle-wrapper.properties` o `settings.gradle.kts`).
+
+**Verificacion de la coherencia (checklist para multi-modulo):**
+
+- [ ] `.release-please-config.json` tiene N+1 entradas (root + N submodulos).
+- [ ] `.release-please-manifest.json` tiene N+1 versiones, todas iguales al inicio.
+- [ ] Solo los submodulos tienen `maven-publish` + `signing` plugin.
+- [ ] `settings.gradle.kts` lista los submodulos con `include(":submodule-name")`.
+- [ ] El `package-name` de cada entrada coincide con el `groupId:artifactId` del `build.gradle.kts` del submodulo.
+- [ ] El CI workflow (`publish-on-tag.yml`) corre `./gradlew publish` en el root, que transitivamente publica todos los submodulos.
+
 #### 8.6.3. Workflow invocable desde cada repo
 
 ```yaml
@@ -2259,6 +2354,53 @@ Los starters exponen properties via `@ConfigurationProperties`. Para que aparezc
 
 `release-please` soporta **multi-repo nativo**. Cada repo se versiona independientemente, y el BOM se actualiza con un PR separado. El mono-repo simplificaria el versionado pero complicaria la autonomia de los modulos. Recomendacion: mantener multi-repo, configurar `release-please` centralizado en `nova-devops`.
 
+### 10.6. Independencia entre nombre de repo y coordenadas Maven (NOVA-SEMVER-31)
+
+**Insight clave (verificado durante el rename 2026-07-09):** el nombre del repo en GitHub (`ahincho/nova-java-mask-utils`) y el `groupId:artifactId` Maven (`pe.edu.nova.java.libs:nova-java-mask-utils`) son **conceptos ortogonales**. Renombrar un repo **NO afecta** a los consumidores que ya tienen la dependencia en su `build.gradle.kts` o `pom.xml`.
+
+**Por que es asi:**
+
+| Concepto | Definido en | Ejemplo |
+|---|---|---|
+| Nombre del repo | GitHub (UI / API) | `ahincho/nova-java-spring-boot-api-standard` (antes) → `ahincho/nova-java-api-standard` (despues) |
+| `groupId:artifactId` | `build.gradle.kts` o `pom.xml` del repo | `pe.edu.nova.java.libs:nova-java-api-standard` (siempre, no cambia) |
+| Coordenada completa consumida | POM/gradle del consumidor | `pe.edu.nova.java.libs:nova-java-api-standard:1.0.0` (siempre, no cambia) |
+| URL del registry | `build.gradle.kts` del repo (sección `repositories.maven.url`) | `https://maven.pkg.github.com/ahincho/nova-java-api-standard` (cambia con el rename del repo) |
+
+**Lo que SI cambia al renombrar un repo (y por lo tanto hay que actualizar):**
+
+1. **URL del repositorio Maven remoto** en `build.gradle.kts` de cada repo publicador:
+   ```kotlin
+   // ANTES
+   url = uri("https://maven.pkg.github.com/ahincho/nova-java-spring-boot-api-standard")
+   // DESPUES
+   url = uri("https://maven.pkg.github.com/ahincho/nova-java-api-standard")
+   ```
+2. **URL del SCM** (Source Code Management) en el POM publicado:
+   ```kotlin
+   pom {
+       scm {
+           url = "https://github.com/ahincho/nova-java-api-standard"  // cambia
+           connection.set("scm:git:git@github.com:ahincho/nova-java-api-standard.git")  // cambia
+       }
+   }
+   ```
+3. **Git remotes locales** de cada developer que clono antes del rename:
+   ```bash
+   git remote set-url origin https://github.com/ahincho/nova-java-api-standard.git
+   ```
+
+**Lo que NO cambia al renombrar un repo:**
+
+- `groupId` y `artifactId` Maven → consumidores siguen resolviendo la misma coordenada.
+- Tags `vX.Y.Z` → siguen siendo los mismos (no se mueven con el rename).
+- Versiones ya publicadas en GitHub Packages / Maven Central → siguen accesibles (las nuevas URLs del registry reflejan el nombre nuevo, pero el contenido es identico porque `groupId:artifactId:version` no cambia).
+- `.release-please-manifest.json` → las versiones se mantienen.
+
+**Implicacion practica para futuros renames:** el rename es **transparente para los consumidores**. Solo afecta a (1) developers que tienen clones locales y (2) la metadata SCM de los POMs publicados a partir del rename. El versionado NO requiere republicar versiones anteriores.
+
+**Verificacion realizada 2026-07-09:** despues del rename de los 6 repos framework-coupled (`nova-java-spring-boot-*` → `nova-java-*`), `api-standard` publico `v1.0.0` con exito. Consumidores que tengan `pe.edu.nova.java.libs:nova-java-api-standard:1.0.0` en su `build.gradle.kts` no requieren ningun cambio.
+
 ---
 
 ## 11. Troubleshooting comun
@@ -2404,6 +2546,93 @@ Durante el primer release end-to-end (`api-standard v1.0.0`) se descubrieron 4 b
 | **Estado** | Pendiente reportar a GitHub Support / buscar en github.com/community. Mientras tanto, logica inlined en los 8 `publish-on-tag.yml`. La reusable `reusable-release-publish.yml` queda en `nova-devops` para referencia historica, pero NO se invoca actualmente. |
 | **Verificacion del workaround** | Run `29024268916` (success con logica inlined). |
 
+### 11.8. Lecciones aprendidas del rename de repos (NOVA-SEMVER-31, 2026-07-09)
+
+Durante el rename de los 6 repos framework-coupled (`nova-java-spring-boot-*` → `nova-java-*`) y la limpieza de los 12 repos archivados, se descubrieron **3 bugs de tooling** que merecen documentacion explicita porque futuros renames (Quarkus, Micronaut, multi-org) los volveran a encontrar.
+
+#### 11.8.1. Bug: `gh api` devuelve string de error en 404, no JSON
+
+| Campo | Valor |
+|---|---|
+| **Sintoma** | El script de verificacion imprime `STILL EXISTS` para repos que ya fueron borrados via `gh repo delete`. |
+| **Causa raiz** | Cuando el repo no existe, `gh api repos/OWNER/REPO` retorna un **string de error en stderr** (no un JSON parseable). El script tenia: `try { parse json } catch { print "STILL EXISTS" }` — y como `gh` no tira excepcion, el `parse json` fallaba por contenido no-JSON y se clasificaba como "existe". |
+| **Impacto real** | Los **6 repos de la primera iteracion del rename** (`nova-java-spring-boot-api-standard`, `nova-java-spring-boot-date-utils`, `nova-java-spring-boot-mapper-utils`, `nova-java-spring-boot-mask-utils`, `nova-java-spring-boot-observability-utils`, `nova-java-spring-boot-example`) se creyeron borrados durante dias, pero **seguian existiendo** en GitHub. |
+| **Fix** | Usar **curl directo con `Invoke-WebRequest -ErrorAction Stop`** y check explicito del codigo HTTP 404. |
+
+**Script de verificacion robusto (PowerShell):**
+
+```powershell
+# CORRECTO: distingue 404 (no existe) de 200 (existe) de 5xx (error de red)
+function Test-RepoExists($owner, $name) {
+    try {
+        $r = Invoke-WebRequest -Uri "https://api.github.com/repos/$owner/$name" `
+                               -Method Head `
+                               -Headers @{ "User-Agent" = "verify-script" } `
+                               -ErrorAction Stop
+        return $r.StatusCode -eq 200
+    } catch {
+        if ($_.Exception.Response.StatusCode -eq 404) { return $false }
+        throw  # 5xx u otro error: propagar (no clasificar como "no existe")
+    }
+}
+
+# USO
+if (Test-RepoExists "ahincho" "nova-java-spring-boot-api-standard") {
+    Write-Host "STILL EXISTS" -ForegroundColor Red
+    gh repo delete ahincho/nova-java-spring-boot-api-standard --yes
+} else {
+    Write-Host "GONE" -ForegroundColor Green
+}
+```
+
+**Por que `gh api` miente:** el wrapper `gh` intenta dar una experiencia consistente, pero en el caso de 404, **no retorna exit code != 0** (porque segun la CLI, "404" es una respuesta valida, solo que con body de error). El `try/catch` en PowerShell no captura nada porque no hay excepcion. El JSON body tiene campos `message`, `documentation_url` y a veces `status` como string, no los campos del repo (`id`, `name`, `full_name`).
+
+**Verificacion aplicada 2026-07-09:** tras descubrir el bug, los 6 repos Round-1 fueron verificados con curl + borrados con `gh repo delete --yes`. Verificacion final: 0 repos con el sufijo `spring-boot` en libs puras.
+
+#### 11.8.2. Bug: dos rondas de rename requeridas (drop + restore)
+
+| Campo | Valor |
+|---|---|
+| **Sintoma** | Primera iteracion del rename removio `spring-boot` de **todos** los repos, incluyendo los que SI estan acoplados a Spring Boot (starters, plugins, parent, archetype). |
+| **Causa raiz** | La regla de naming inicial fue "simplificar nombres quitando `spring-boot` porque es redundante". Esto ignora que starters y plugins SI declaran dependencias de Spring Boot en su POM/`build.gradle.kts`. |
+| **Impacto real** | 6 repos con nombres incorrectos (`nova-java-commons-starter` deberia ser `nova-java-commons-spring-boot-starter`; `nova-java-spring-boot-starter` deberia ser `nova-java-spring-boot-starter` — no afectado; etc). |
+| **Fix** | Segunda ronda de rename (NOVA-SEMVER-31) restauro `spring-boot` en los 6 repos framework-coupled. Los 6 originales de la primera ronda (ahora archivados) se borraron despues de verificar que los nuevos existian. |
+| **Regla aprendida** | Antes de hacer un rename bulk, **clasificar cada repo** segun §0 (framework-coupled vs no) y **probar en 1-2 repos primero** antes de aplicar a todos. |
+
+**Proceso de rename seguro (leccion):**
+
+1. Listar los repos a renombrar con su categoria (lib pura / starter / plugin / parent / etc).
+2. Aplicar la convencion de §0 a cada uno.
+3. **Probar con 1 repo** de cada categoria.
+4. Verificar que el `build.gradle.kts` y la URL del registry se actualizaron correctamente.
+5. Si el primer repo funciona, aplicar al resto en lote.
+6. Despues del rename, ejecutar el script de §11.8.1 para confirmar que los repos viejos SE BORRARON y los nuevos EXISTEN.
+
+#### 11.8.3. Bug: el primer release `v1.0.0` no es `0.1.0` (decision de pre-1.0)
+
+| Campo | Valor |
+|---|---|
+| **Sintoma** | `release-please` abrio PR con bump a `0.1.0`, pero la convencion de Nova Platform es **empezar en `1.0.0`**. |
+| **Causa raiz** | El `.release-please-manifest.json` se inicializo con `"0.1.0"`. `release-please` respeta ese valor como punto de partida. |
+| **Impacto real** | El primer PR de release de `api-standard` tuvo que mergearse con `0.1.0` y luego un commit `feat: bump to 1.0.0` para forzar el siguiente bump a `1.0.0`. |
+| **Fix aplicado** | En el manifest, `".": "0.1.0"` → `".": "1.0.0"`. Esto NO requiere republicar (porque el tag `v1.0.0` no existia aun). |
+| **Regla adoptada** | Nova Platform NO usa pre-1.0. El primer release es **1.0.0** (no 0.1.0, no 0.0.1). Esto se formaliza en §8.X (politica de versionado) — pendiente documentar. |
+
+**Nota:** esta decision es **opinable**. Alternativas validas:
+
+- **Pre-1.0 estricto (SemVer canonico):** `0.x.y` indica "API no estable, puede romper en cualquier minor bump". Util para librerias experimentales.
+- **1.0.0 desde el inicio (Spring, jQuery, React):** `1.0.0` significa "primera release publica, API considerada estable". Util para plataformas.
+
+Para Nova Platform, `1.0.0` desde el inicio refleja la intencion de "API publica y estable". Si en el futuro se quiere experimentar con una lib, se puede partir de `0.1.0` para esa lib especifica, pero el default es `1.0.0`.
+
+#### 11.8.4. Resumen de las 3 lecciones
+
+| # | Leccion | Aplicar a futuros renames |
+|---|---|---|
+| 1 | `gh api` miente en 404 — usar curl con `-ErrorAction Stop` | Cualquier verificacion de existencia de repo |
+| 2 | Clasificar antes de renombrar bulk — probar en 1 repo por categoria | Renames a Quarkus, Micronaut, o reorganizaciones multi-org |
+| 3 | Inicializar `.release-please-manifest.json` con la version objetivo (no `0.1.0` si la politica es `1.0.0`) | Cualquier nuevo repo Java |
+
 ---
 
 ## 12. Roadmap de adopcion (propuesto)
@@ -2478,6 +2707,18 @@ Durante el primer release end-to-end (`api-standard v1.0.0`) se descubrieron 4 b
 29. **NOVA-SEMVER-29:** Generar par de claves GPG y configurar secrets en GitHub (cuando se decida publicar a Maven Central). Guia completa en seccion 10.3.
 30. **NOVA-SEMVER-30:** Configurar variable `NOVA_PACKAGE_VISIBILITY` en los 19 repos (default `public`). Guia en seccion 3.1.1.
 
+### Post-Sprint 0 — Naming convention (NOVA-SEMVER-31, 2026-07-09)
+
+> **Estado verificado al 2026-07-09:** NOVA-SEMVER-31 **COMPLETADO**. Convencion de naming formalizada en §0 y aplicada a los 15 repos Java. 6 repos framework-coupled corregidos para incluir `spring-boot` en el nombre (segunda ronda de rename). 12 repos archivados eliminados via `gh repo delete --yes` (ver §11.8).
+
+31. **NOVA-SEMVER-31:** ✅ Definir y aplicar la convencion de naming de repos Nova Platform Java:
+    - **§0** creado con la tabla de patrones por tipo de artefacto.
+    - **§0.1** creado con el arbol de decision "¿este repo lleva spring-boot?".
+    - **6 repos renombrados** (segunda ronda, restore de `spring-boot` en framework-coupled): `nova-java-commons-starter` → `nova-java-commons-spring-boot-starter`; `nova-java-observability-starter` → `nova-java-observability-spring-boot-starter`; etc. Ver §15.2 fila "Convencion de naming aplicada".
+    - **12 repos archivados eliminados** (6 de la primera ronda del rename + 6 originales de la segunda ronda).
+    - **Bug del `gh api`** en 404 documentado en §11.8.1 (causa raiz: `gh` no tira excepcion en 404, devuelve string de error en stderr).
+    - **Proceso de rename seguro** documentado en §11.8.2 (clasificar antes de renombrar bulk, probar en 1 repo por categoria).
+
 ---
 
 ## 13. Referencias (fuentes verificadas)
@@ -2541,7 +2782,7 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | Producto | "Galaxy Training" / "Nova Platform" | Nova (unico) | ✅ Nova (unico, todos los repos renombrados) | Idem | Idem |
 | Troubleshooting | No documentado | No documentado | ✅ Si, seccion 11 con 6 sub-tablas | Idem | Idem |
 | Firma GPG | No requerida | No requerida | 🟡 Preparada (composite action `nova-setup-gpg` lista + signing plugin en 9 repos), clave NO generada (NOVA-SEMVER-29) | Activada (workflows listos, ejecucion bloqueada hasta generar clave) | Idem |
-| **Total actividades NOVA-SEMVER** | 0 | 4 pre-req (00a-00d) | **17/34 completadas** (4 pre-req + 4 Sprint 0 + 4 Sprint 1 + 4 Sprint 2 + 1 Sprint 3) | 28 (01-28) | **34** (4 pre-req + 28 sprints + 2 backlog) |
+| **Total actividades NOVA-SEMVER** | 0 | 4 pre-req (00a-00d) | **23/35 completadas** (4 pre-req + 4 Sprint 0 + 4 Sprint 1 + 4 Sprint 2 + 2 Sprint 3 + 4 Sprint 5 + 1 NOVA-SEMVER-31) | 28 (01-28) | **35** (4 pre-req + 28 sprints + 2 backlog + 1 NOVA-SEMVER-31) |
 | Alcance | — | Solo Java + multi-stack | ✅ Solo Java + multi-stack (NestJS fuera) | Idem | Idem (NestJS en roadmap separado) |
 
 ---
@@ -2566,6 +2807,11 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | 12 | **lefthook installation** | **Auto via `npm prepare` script**. NO manual `lefthook install`. Reduce friccion para nuevos developers. | Seccion 8.7.2 |
 | 13 | **`package-lock.json`** | **Commiteado** en todos los repos. Garantiza reproducibilidad de `npm install`. | Seccion 8.7.3 |
 | 14 | **Pin de composite actions** | **`@main` temporalmente**, switch a `@v1` tras Sprint 3 estabilice. 22 referencias cambiadas. | Seccion 5.6 + §15.2 fila "@v1 -> @main" |
+| 15 | **Convencion de naming de repos** (NOVA-SEMVER-31) | **Nombre del repo = tecnologia objetivo del artefacto**, no el lenguaje. `nova-java-<rol>` para libs puras; `nova-java-<rol>-spring-boot-<tipo>` para starters/extensions; `nova-java-spring-boot-<rol>` para plugins/parent/archetype. Ver §0.1 (arbol de decision) para casos ambiguos. | §0 (tabla de patrones) + §0.1 (arbol de decision) + §10.6 (independencia repo/coordenadas) |
+| 16 | **Politica de version inicial** | **`1.0.0` desde el primer release** (no `0.1.0`). Nova Platform NO usa pre-1.0. Excepcion: libs experimentales pueden partir de `0.1.0` si se decide explicitamente. | §11.8.3 (decision documentada) + `.release-please-manifest.json` inicializado con `".": "1.0.0"` en los 10 repos Gradle |
+| 17 | **Criterio de cierre de sprint** | Un sprint se considera **cerrado** cuando todas sus actividades (NOVA-SEMVER-NN a NN) estan ✅, O cuando se documenta explicitamente en §15.4 que las actividades restantes son **deferidas a otro sprint o backlog** (no abandonadas silenciosamente). | §12 (estructura de sprints) + §15.5 (roadmap visual) |
+| 18 | **Politica de deprecation de repos** | Un repo se considera **deprecado** cuando (1) se renombra a un nombre archivado (`*-archived` o similar), (2) se desactiva publish workflows, (3) se anade un README con link al repo sucesor. **Despues de 6 meses sin actividad**, se borra con `gh repo delete --yes` previa verificacion de que ningun consumidor resuelve la coordenada. | Proceso aplicado en NOVA-SEMVER-31 (12 repos borrados). Pendiente formalizar plantilla de README de deprecation. |
+| 19 | **Criterio de pin de composite actions** | El switch de `@main` a `@v1` (tag SemVer) se hara cuando se cumpla **al menos 2 de 3**: (1) todas las composite actions del Sprint 1 + 5 (`nova-setup-java/node/gpg/validate-build/gather-facts/publish-aggregator`) tengan al menos 1 release real (no solo commits en `main`); (2) el equipo haya revisado y aprobado la API publica (inputs/outputs) de las 6 actions; (3) haya pasado 1 ciclo de release de al menos 1 repo usando las 6 actions. **Actual estado**: 0 de 3 criterios cumplidos, por lo que se mantiene `@main`. | §5.4 (composite actions) + §15.1 #14 (decision previa) + §15.2 fila "@v1 -> @main" |
 
 ### 15.2. Piezas verificadas contra el estado real de los repos (actualizado 2026-07-09)
 
@@ -2594,11 +2840,14 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | Gradle wrapper 9.2.0 consistente en los 10 repos | ✅ OK | ✅ Confirmado en `gradle-wrapper.properties` |
 | 0 archivos `build/` o `.gradle/` tracked en git | ✅ OK | ✅ Confirmado con `git ls-files` (10 repos limpios) |
 | `@v1` -> `@main` pin temporal en workflows | ✅ OK (NOVA-SEMVER-13 side fix) | ✅ 22 referencias cambiadas. Pin revertira a `@v1` tras Sprint 3 estabilice |
+| **Convencion de naming aplicada (NOVA-SEMVER-31)** | ✅ OK | ✅ 15/15 repos Java con nombres conformes a §0. 6 repos framework-coupled restaurados a `spring-boot` en el nombre. 12 repos archivados eliminados. Verificado con `gh repo view` + curl en cada uno. |
+| **`.release-please-manifest.json` inicializado en `1.0.0`** | ✅ OK (NOVA-SEMVER-31) | ✅ 10 archivos `.release-please-manifest.json` con `".": "1.0.0"` (no `0.1.0`). Politica de version inicial documentada en §15.1 decision #16. |
+| **Lecciones aprendidas del rename documentadas** | ✅ OK (NOVA-SEMVER-31) | ✅ §11.8 cubre 3 bugs: (1) `gh api` miente en 404, (2) dos rondas de rename requeridas, (3) version inicial debe ser `1.0.0`. |
 
 ### 15.3. Lo que esta LISTO y verificado (no requiere accion)
 
 - Documento de estrategia completo con 15 secciones (numeracion corregida, sin duplicados).
-- **34 actividades NOVA-SEMVER** distribuidas: 4 pre-requisitos (00a-00d) + 28 en 5 sprints (01-28) + 2 backlog (29-30).
+- **35 actividades NOVA-SEMVER** distribuidas: 4 pre-requisitos (00a-00d) + 28 en 5 sprints (01-28) + 2 backlog (29-30) + 1 post-Sprint 0 (31, naming convention).
 - Codigo de ejemplo para Gradle (`maven-publish`, `signing`, `buildCache`, `org.gradle.caching`) — marcado como **objetivo**, no estado actual.
 - **7 composite actions con `action.yml` completo** (seccion 5.5), incluyendo `nova-setup-gpg` corregida para usar `inputs` en vez de `secrets.*`.
 - Configuracion YAML para `release-please` (por repo, no centralizada), `commitlint`, `lefthook`, `gradle/actions/setup-gradle`.
@@ -2620,6 +2869,7 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | **NOVA-SEMVER-23-24** (Local Build Cache + Configuration Cache) | ✅ **COMPLETADO** (2026-07-09, commits en 10 repos) | Nada. `org.gradle.caching=true` + `org.gradle.configuration-cache=true` agregados a 10 `gradle.properties` (9 en `D:\Galaxy\Projects\java\` + example en `/instances/`). |
 | **NOVA-SEMVER-25** (Remote Build Cache via GitHub Actions) | ✅ **COMPLETADO** (2026-07-09, commit `27fb98e` en `nova-devops`) | Nada. `gradle/actions/setup-gradle@v4` agregado a `reusable-build-gradle.yml` con `cache-read-only` dinamico. |
 | **Composite actions NOVA-SEMVER-26** (3 creadas, 1 descartada) | ✅ **COMPLETADO** (2026-07-09, commit `95bc786` en `nova-devops`) | Nada. `nova-validate-build`, `nova-gather-facts`, `nova-publish-aggregator` creadas con `action.yml` + `README.md`. `nova-configure-gradle-cache` **descartada** (action oficial `gradle/actions/setup-gradle@v4` es suficiente, ver §5.4.1). |
+| **NOVA-SEMVER-31** (convencion de naming) | ✅ **COMPLETADO** (2026-07-09, commit `3b434be` en `docs` repo) | Nada. §0 + §0.1 + §10.6 + §11.8 creados. 15/15 repos Java con nombres conformes. 12 repos archivados eliminados (ver §15.2). |
 | **Remote Build Cache** (NOVA-SEMVER-23-25) | ✅ **COMPLETADO** (2026-07-09) | Nada. NOVA-SEMVER-23 + 24 + 25 implementados en 10 repos + `nova-devops`. |
 | **Variable `NOVA_PACKAGE_VISIBILITY`** (NOVA-SEMVER-30) | Documentada | Configurar en cada repo via `gh variable set` o UI (backlog) |
 | **Secrets de GPG** (NOVA-SEMVER-29) | Documentado, NO generados | Cuando se decida publicar a Maven Central (backlog) |
@@ -2639,10 +2889,11 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | **2** | Multi-registry publishing + GPG (preparado) | 09-12 | ✅ **COMPLETADO** (4/4) | — |
 | **3** | Activacion release-please + primer release | 13-16 | 🟡 En curso (2/4) — NOVA-SEMVER-13 ✅, NOVA-SEMVER-15 ✅ | **NOVA-SEMVER-14:** namespace Sonatype (opcional, no bloquea) |
 | **4** | Publicacion publica + visibilidad configurable | 17-22 | ⏳ Pendiente (0/6) | NOVA-SEMVER-17 (Maven Central, bloqueado por 29) |
-| **5** | Build Cache en GitHub Actions + composite actions | 23-28 | ✅ **COMPLETADO** (6/6) — NOVA-SEMVER-23 ✅, 24 ✅, 25 ✅, 26 ✅, 27 ⏳, 28 ⏳ | NOVA-SEMVER-27: migrar workflows restantes para usar las nuevas composite actions |
+| **5** | Build Cache en GitHub Actions + composite actions | 23-28 | 🟡 **En curso (4/6)** — NOVA-SEMVER-23 ✅, 24 ✅, 25 ✅, 26 ✅, 27 ⏳, 28 ⏳ | NOVA-SEMVER-27: migrar workflows restantes para usar las nuevas composite actions |
 | **Backlog** | GPG firma + variable visibilidad | 29-30 | ⏳ Diferido (0/2) | NOVA-SEMVER-30 (configurar visibilidad default `public`) |
+| **Post-Sprint 0** | Convencion de naming | 31 | ✅ **COMPLETADO** (1/1, 2026-07-09) | — |
 
-**Progreso total: 24/34 actividades (70.6%)**
+**Progreso total: 23/35 actividades (65.7%)**
 
 ### 15.6. Resumen ejecutivo (1 minuto de lectura, actualizado 2026-07-09)
 
@@ -2659,7 +2910,7 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 - **3 repos migrados de Maven a Gradle**: mask-utils, observability-utils, starter (cumplen la convencion Gradle-first).
 - **23 ADRs creados** en `docs/adrs/` (15 shared/java + 8 NestJS placeholders), pendientes de commit + push.
 
-**Que se completo en Pre-req + Sprint 0 + Sprint 1 + Sprint 2 + Sprint 3 parcial + Sprint 5 parcial (4 + 4 + 4 + 4 + 2 + 4 = 24 actividades):**
+**Que se completo en Pre-req + Sprint 0 + Sprint 1 + Sprint 2 + Sprint 3 parcial + Sprint 5 parcial + Post-Sprint 0 (4 + 4 + 4 + 4 + 2 + 4 + 1 = 23 actividades):**
 - ✅ **NOVA-SEMVER-00a:** `gradle.properties` en 10 repos Gradle.
 - ✅ **NOVA-SEMVER-00b:** `groupId` migrado de `pe.edu.galaxy.training` a `pe.edu.nova` (13 repos).
 - ✅ **NOVA-SEMVER-00c:** placeholder `OWNER` corregido a `ahincho` (10 repos con publishing).
@@ -2687,6 +2938,7 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 - ✅ **NOVA-SEMVER-24 (2026-07-09):** `org.gradle.configuration-cache=true` agregado a 10 `gradle.properties`. Habilita Configuration Cache (separa configuration de execution, hasta 50% menos tiempo en CI).
 - ✅ **NOVA-SEMVER-25 (2026-07-09):** `gradle/actions/setup-gradle@v4` agregado a `reusable-build-gradle.yml`. Habilita Remote Build Cache via GitHub Actions Cache (compartido entre runners y developers).
 - ✅ **NOVA-SEMVER-26 (2026-07-09):** 3 composite actions nuevas creadas: `nova-validate-build` (valida Java version, secrets, gradle.properties, lefthook), `nova-gather-facts` (recolecta version, branch, SHA, is-snapshot, is-tag), `nova-publish-aggregator` (dispatch por registry). `nova-configure-gradle-cache` **descartada** (action oficial `gradle/actions/setup-gradle@v4` cumple la misma funcion, ver §5.4.1).
+- ✅ **NOVA-SEMVER-31 (2026-07-09, commit `3b434be` en `docs`):** Convencion de naming de repos formalizada. §0 creado con tabla de patrones; §0.1 con arbol de decision; §10.6 con nota sobre independencia repo/coordenadas Maven; §11.8 con 3 lecciones aprendidas del rename. 6 repos framework-coupled corregidos a `spring-boot` en el nombre. 12 repos archivados eliminados. 15/15 repos Java con nombres conformes.
 
 **Que falta (Sprint 3 parcialmente + Sprint 4 + 5 parcialmente + 2 backlog, 10 actividades):**
 1. **Sprint 3 (NOVA-SEMVER-14, 16, 2/4 pendientes):** Crear namespace `pe.edu.nova` en Sonatype, publicar a GitHub Packages y verificar consumo desde `nova-bom`. NOVA-SEMVER-13 ✅, NOVA-SEMVER-15 ✅.
@@ -2743,15 +2995,19 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | `pe.edu.nova` (sin referencias a `pe.edu.galaxy`) | 15/15 repos Java | ~200 archivos migrados |
 | Gradle wrapper `9.2.0` | 10/10 repos Gradle | `gradle-wrapper.properties` consistente |
 | 0 archivos `build/` o `.gradle/` tracked en git | 10/10 repos Gradle | Verificado con `git ls-files` |
+| **Convencion de naming aplicada (NOVA-SEMVER-31)** | 15/15 repos Java | ✅ Nombres conformes a §0: libs puras sin `spring-boot`; starters/plugins/parent/archetype con `spring-boot`. 12 repos archivados eliminados via `gh repo delete --yes`. Ver §11.8 para lecciones aprendidas. |
 
 ### Pendiente antes de NOVA-SEMVER-14
 
-- **ADRs (23 archivos)** en `D:\Galaxy\Projects\docs\adrs\`: `shared/` (10), `java/` (5), `nest/` (8 placeholders). Pendiente: commit + push al docs repo.
-- **Test del primer release:** ejecutar el flujo end-to-end (push commits Conventional → release-please crea PR → merge → tag → publish a GitHub Packages).
+- **ADRs (23 archivos)** en `D:\Galaxy\Projects\docs\adrs\`: `shared/` (10), `java/` (5), `nest/` (8 placeholders). **Estado verificado 2026-07-09: siguen sin commitear** (untracked en `git status` de `D:\Galaxy\Projects\docs\`). Pendiente: `git add adrs/ && git commit` en el docs repo.
+- **Test del primer release:** NOVA-SEMVER-15 ya se ejecutó con exito (`api-standard v1.0.0`, run `29024268916`). Pendiente extender el test a los otros 9 repos Gradle.
 
 ### Siguiente paso
 
-**Sprint 3 — NOVA-SEMVER-14-16:**
-1. **NOVA-SEMVER-14:** Crear namespace `pe.edu.nova` en Sonatype OSSRH (ticket en `issues.sonatype.org`). Bloquea Maven Central end-to-end.
-2. **NOVA-SEMVER-15:** Primer release de prueba `0.1.0` en los 10 repos Gradle via el flujo release-please → tag → publish. Configuración ya lista en los 10 repos.
-3. **NOVA-SEMVER-16:** Publicar `0.1.0` a GitHub Packages y verificar consumo desde `nova-bom` (Maven-only, pendiente configurar su propio `ci.yml` + release-please).
+**Prioridad inmediata — Sprint 5 cerrado (2 actividades pendientes):**
+1. **NOVA-SEMVER-27:** Migrar `reusable-build-{gradle,maven}.yml` y `reusable-publish-{gradle,maven}.yml` para usar las 6 composite actions (`nova-setup-java`, `nova-setup-node`, `nova-validate-build`, `nova-gather-facts`, `nova-publish-aggregator`, `nova-setup-gpg`). Cambio de tipo: refactor, sin impacto funcional.
+2. **NOVA-SEMVER-28:** Medir tiempos de CI antes/despues de las optimizaciones de Sprint 5 (Local + Remote + Configuration Cache). Documentar mejora en una tabla con timestamps.
+
+**Sprint 3 — NOVA-SEMVER-14, 16 (2 actividades pendientes):**
+3. **NOVA-SEMVER-14:** Crear namespace `pe.edu.nova` en Sonatype OSSRH (ticket en `issues.sonatype.org`). Bloquea Maven Central end-to-end. **Opcional**, no bloquea GitHub Packages.
+4. **NOVA-SEMVER-16:** Publicar `1.0.0` (NO `0.1.0`) desde otro repo y verificar consumo desde `nova-bom` (Maven-only, pendiente configurar su propio `ci.yml` + release-please). Cambiar el texto de "0.1.0" a "1.0.0" refleja la decision de §15.1 #16.
