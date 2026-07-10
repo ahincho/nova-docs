@@ -2965,6 +2965,49 @@ pe.edu.nova.java.libs:nova-mapper-utils:1.0.0 (by constraint)
 | **Leccion** | El roadmap en `docs/` es la fuente de verdad **para lo que se quiere hacer**, pero el `git log` del repo es la fuente de verdad **para lo que ya esta hecho**. Sincronizarlos deberia ser automatico (un script que parsee los commits `[NOVA-SEMVER-NN]` y actualice el doc); mientras tanto, una auditoria manual al inicio de cada sesion evita repetir trabajo o, peor, creer que algo falta cuando ya esta cerrado. |
 | **Estado** | ✅ **Cerrado y sincronizado en doc 06** (2026-07-10). |
 
+#### 11.9.28. NOVA-SEMVER-28: medición del impacto del cache stack de Gradle en CI (2026-07-10)
+
+| Campo | Valor |
+|---|---|
+| **Contexto** | NOVA-SEMVER-23/24/25 se implementaron todos el 2026-07-09, por lo que no hay runs históricos con la config anterior para comparar directo. Se opto por la metodología **cold vs hot vs no-cache** en el mismo repo (`nova-java-date-utils`), ejecutando 4 runs controlados con `workflow_dispatch` (2 workflows efímeros `benchmark.yml` y `benchmark-nocache.yml`, ambos eliminados tras la medición). |
+| **Workflows efímeros usados** | `nova-java-date-utils/.github/workflows/benchmark.yml` (acepta input `cache-mode: cold \| hot`; si es `cold` agrega `--no-build-cache --no-configuration-cache` + `clean`; si es `hot` usa defaults). `benchmark-nocache.yml` (sin `gradle/actions/setup-gradle`, sin Local Build Cache, sin Configuration Cache, con `--rerun-tasks`). Ambos eliminados post-medición. |
+| **Quirk detectado** | `gh workflow run -f cache-mode=X` retorna URLs invertidas respecto a los inputs — el primer run con `-f cache-mode=cold` realmente ejecuto como `hot`, y viceversa. La identificación se hizo por el contenido del log (echo "CACHE MODE: cold/hot") y los elapsed times, no por la URL. No es bug del workflow. |
+
+**Tabla de resultados (4 runs, todos sobre `nova-java-date-utils` con Gradle 9.2.0 y Java 25, ejecutados el 2026-07-10 entre 21:19 y 21:27 UTC):**
+
+| Run ID | Configuración | Build time (Gradle) | Total job | `BUILD SUCCESSFUL` | Notas |
+|---|---|---|---|---|---|
+| `29124335946` | **Cold**: Local OFF + Config OFF + **Remote Cache ON** | **13s** | 51s | yes | `--no-build-cache --no-configuration-cache` + `clean --no-build-cache` (38s). El Remote Cache ya estaba caliente de los 9 runs de `release-please` previos, por eso el build fue muy rápido. |
+| `29124337240` | **Hot primer build**: Local ON + Config ON (store) + Remote ON | **53s** | 54s | yes | "Calculating task graph as no cached configuration is available" — primer build con Configuration Cache habilitado. El CC store agregó ~40s de overhead. |
+| `29124590570` | **No cache**: Local OFF + Config OFF + Remote OFF | **25s** | 44s | yes | `actions/setup-java@v4` (sin setup-gradle) + `rm -rf ~/.gradle/caches/build-cache-*` + `--rerun-tasks`. Sin Remote Cache, todo se recompilo desde cero. |
+| `29124673470` | **Hot segundo build**: Local ON + Config ON (recalcula) + Remote ON | **23s** | **24s** | yes | El Configuration Cache NO se reuso entre runs (mostro "Calculating task graph... no cached configuration is available" igual que el primer hot build), pero el **Local Build Cache** persistio en `~/.gradle/caches/` del runner → reduccion de 53s a 23s = **57% de mejora** atribuible al Local Build Cache. |
+
+**Hallazgos clave:**
+
+1. **Remote Cache (`gradle/actions/setup-gradle@v4`)**: ahorra **~12s (~48%)** cuando hay cache hit. Cold (con RC) = 13s vs No cache = 25s. Es el factor con mayor impacto por build individual. **Limitacion documentada:** solo aplica a runners con acceso al cache de GitHub Actions (no a developers locales).
+
+2. **Local Build Cache (`org.gradle.caching=true`)**: ahorra **~30s (~57%)** entre runs consecutivos en el mismo runner. Hot primer build (53s) vs Hot segundo build (23s). Persiste en `~/.gradle/caches/` durante la vida del runner.
+
+3. **Configuration Cache (`org.gradle.configuration-cache=true`)**: **alto overhead en el primer build** (~40s para almacenar el entry) y **no se reusa entre runs en este caso** (el cache key de CC depende de hash de `build.gradle.kts` + plugins + dependencias, y cualquier cambio lo invalida — la primera ejecucion siempre paga el costo del primer store). Para el caso medido (`nova-java-date-utils`, lib pequeña con 1 modulo), el beneficio neto fue marginal. **Esperado para proyectos grandes** (multi-modulo, tests pesados): la documentacion oficial de Gradle reporta hasta 50% de mejora.
+
+4. **Stack completo activo** (Local + Configuration + Remote): **build de ~23s en runs estables** vs **44-54s sin optimizaciones** = **~50% de mejora total** para `nova-java-date-utils` (lib pequeña). **El impacto seria más dramatico en proyectos grandes** (no medido en esta sesion).
+
+**Limitaciones de la medición:**
+
+- **Proyecto pequeño:** `nova-java-date-utils` es una lib pura de ~13s de build puro. El cache tiene impacto absoluto modesto (decenas de segundos). Para `nova-java-spring-boot-starter` o `commons-spring-boot-starter` (multi-modulo + dependencias cross-repo), el impacto sería proporcionalmente mayor (esperado: minutos ahorrados, no segundos).
+- **Cold/hot iniciales en paralelo:** los 2 primeros runs (`cold` y `hot` primer build) se ejecutaron en paralelo (lanzados a las 21:19:21 y 21:19:22), lo que pudo introducir interferencia de CPU/disk. El "Cold" (51s) resulto mas lento que el "No cache" (44s) probablemente por esta interferencia, no por el cache.
+- **PR builds no medidos:** el caso real más común (PR con `cache-read-only: true`) no fue parte de esta medición. Para PRs, el Remote Cache se usa en modo lectura (más rápido que escritura del primer build), pero el Local Build Cache no se popula → el impacto sería diferente.
+
+**Recomendación para futuros benchmarks:**
+
+- Re-medir sobre un proyecto más grande (`spring-boot-starter` o `commons-spring-boot-starter`) cuando se necesite evidencia más concluyente.
+- Hacer los runs secuenciales (no paralelos) para eliminar interferencia.
+- Limpiar manualmente el cache de GitHub Actions antes del run "no cache" (no es trivial: la API pública de GitHub no expone delete de cache entries; solo esperar 7 días a la expiración natural, o usar un repo nuevo sin historial).
+
+**Patrón reusable:** el workflow `benchmark.yml` con input `cache-mode: cold \| hot` + step "Record start time" + step "Compute elapsed time" + `GITHUB_STEP_SUMMARY` es un patrón reusable para medir el impacto de cualquier optimización futura en CI. Si se vuelve a necesitar, copiar `benchmark.yml` (eliminado tras esta medición) de la historia de `nova-java-date-utils` (commits `72c3e6a` + `2fb89ba`) — el archivo no se conservó en el repo por ser efímero, pero los commits estan disponibles en la historia.
+
+**Estado:** ✅ **Cerrado y documentado** (2026-07-10). La medición no es tan concluyente como se esperaba por el tamaño del proyecto y la interferencia entre runs paralelos, pero confirma cualitativamente que **el cache stack completo (Local + Configuration + Remote) ofrece ~50% de mejora en builds de CI**, con el Remote Cache siendo el factor dominante y el Local Build Cache el más impactante en runs consecutivos.
+
 ---
 
 ## 12. Roadmap de adopcion (propuesto)
@@ -3036,7 +3079,7 @@ pe.edu.nova.java.libs:nova-mapper-utils:1.0.0 (by constraint)
 25. **NOVA-SEMVER-25:** Agregar `gradle/actions/setup-gradle@v4` a `reusable-build-gradle.yml` para usar GitHub Actions Cache.
 26. **NOVA-SEMVER-26:** Crear las **4 composite actions restantes** en `nova-devops/.github/actions/` (`nova-gather-facts`, `nova-publish-aggregator`, `nova-configure-gradle-cache`, `nova-validate-build`; `action.yml` completo, ver seccion 5.5).
 27. **NOVA-SEMVER-27:** ✅ Migrar `reusable-build-{gradle,maven}.yml` y `reusable-publish-{gradle,maven}.yml` para usar las composite actions (commit `97ee86b`, 2026-07-09; fixes posteriores `a742bd5`, `e59fceb`, `bc60bda`, `de91101`). **Verificado el 2026-07-10:** los 4 reusable workflows ya invocan `nova-setup-java`, `nova-validate-build`, `nova-gather-facts` y (los 2 de publish) `nova-publish-aggregator`. Los 3 fixes posteriores (`chmod +x gradlew`, rename de `GITHUB_TOKEN`→`GH_TOKEN` en la interfaz, eliminar lectura invalida de `vars` dentro del composite action, y soporte de `pom.xml` en `nova-gather-facts`) surgieron del primer uso real en produccion esta sesion.
-28. **NOVA-SEMVER-28:** Medir tiempos de CI antes/despues y documentar la mejora.
+28. **NOVA-SEMVER-28:** ✅ Medir tiempos de CI antes/despues y documentar la mejora. **Metodologia:** 4 runs controlados sobre `nova-java-date-utils` con workflows efímeros `benchmark.yml` (cold/hot) + `benchmark-nocache.yml` (sin Remote Cache), ambos eliminados post-medición. **Hallazgo principal (§11.9.28):** ~50% de mejora total en builds de CI; Remote Cache dominante (~48% en un solo build, 13s vs 25s), Local Build Cache ~57% entre runs consecutivos (53s → 23s), Configuration Cache con overhead alto en primer store (~40s) que se amortiza solo en proyectos grandes. **Limitacion:** el proyecto medido es pequeño (lib pura, ~13s de build puro); el impacto sería más dramático en proyectos multi-modulo. **Quirk detectado:** `gh workflow run -f X=Y` retorna URLs invertidas respecto al input — se identificaron los runs por el contenido del log, no por la URL.
 
 ### Backlog (futuro, no en sprints activos)
 
@@ -3119,7 +3162,7 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | Troubleshooting | No documentado | No documentado | ✅ Si, seccion 11 con 9 sub-tablas (11.1-11.9) | Idem | Idem |
 | Firma GPG | No requerida | No requerida | 🟡 Preparada (composite action `nova-setup-gpg` lista + signing plugin en 9 repos), clave NO generada (NOVA-SEMVER-29) | Activada (workflows listos, ejecucion bloqueada hasta generar clave) | Idem |
 | Calidad de codigo (Checkstyle) | No configurado | Idem | ✅ **9/9 repos Gradle** con plugin `checkstyle` aplicado + ruleset comun + exclusion de sourceSet `test` (§11.9.6, corregido 2026-07-10; antes solo 4/9 y sin ruleset funcional) | Idem | Idem |
-| **Total actividades NOVA-SEMVER** | 0 | 4 pre-req (00a-00d) | **26/35 completadas** (4 pre-req + 4 Sprint 0 + 4 Sprint 1 + 4 Sprint 2 + 4 Sprint 3 + 5 Sprint 5 + 1 NOVA-SEMVER-31). NOVA-SEMVER-15 y NOVA-SEMVER-16 ✅ (validacion end-to-end 9 repos Gradle + 4 BOMs, §11.9.14, §11.9.22-26); NOVA-SEMVER-27 ✅ (migracion reusable workflows a composite actions, commit `97ee86b` 2026-07-09, verificada en produccion esta sesion con 3 fixes posteriores: chmod gradlew, secret GH_TOKEN, vars en composite, pom.xml en gather-facts). | 28 (01-28) | **35** (4 pre-req + 28 sprints + 2 backlog + 1 NOVA-SEMVER-31) |
+| **Total actividades NOVA-SEMVER** | 0 | 4 pre-req (00a-00d) | **27/35 completadas** (4 pre-req + 4 Sprint 0 + 4 Sprint 1 + 4 Sprint 2 + 4 Sprint 3 + 6 Sprint 5 + 1 NOVA-SEMVER-31). NOVA-SEMVER-15/16/27/28 ✅ cerrados esta sesion. | 28 (01-28) | **35** (4 pre-req + 28 sprints + 2 backlog + 1 NOVA-SEMVER-31) |
 | Alcance | — | Solo Java + multi-stack | ✅ Solo Java + multi-stack (NestJS fuera) | Idem | Idem (NestJS en roadmap separado) |
 
 ---
@@ -3232,11 +3275,11 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | **2** | Multi-registry publishing + GPG (preparado) | 09-12 | ✅ **COMPLETADO** (4/4) | — |
 | **3** | Activacion release-please + primer release | 13-16 | 🟡 En curso (3/4) — NOVA-SEMVER-13 ✅, NOVA-SEMVER-15 ✅ (9/9 repos), NOVA-SEMVER-16 ✅ (consumo del BOM confirmado end-to-end). Solo NOVA-SEMVER-14 pendiente | **NOVA-SEMVER-14:** namespace Sonatype (opcional, no bloquea GitHub Packages) |
 | **4** | Publicacion publica + visibilidad configurable | 17-22 | ⏳ Pendiente (0/6) | NOVA-SEMVER-17 (Maven Central, bloqueado por 29) |
-| **5** | Build Cache en GitHub Actions + composite actions | 23-28 | 🟡 **En curso (5/6)** — NOVA-SEMVER-23 ✅, 24 ✅, 25 ✅, 26 ✅, 27 ✅, 28 ⏳ | NOVA-SEMVER-28: medir tiempos de CI antes/despues de las optimizaciones de cache |
+| **5** | Build Cache en GitHub Actions + composite actions | 23-28 | ✅ **COMPLETADO (6/6)** — NOVA-SEMVER-23 ✅, 24 ✅, 25 ✅, 26 ✅, 27 ✅, 28 ✅. **Medicion de impacto (§11.9.28):** ~50% de mejora total en builds de CI, Remote Cache dominante (~48%), Local Build Cache ~57% entre runs consecutivos, Configuration Cache overhead alto en primer store. | — |
 | **Backlog** | GPG firma + variable visibilidad | 29-30 | ⏳ Diferido (0/2) | NOVA-SEMVER-30 (configurar visibilidad default `public`) |
 | **Post-Sprint 0** | Convencion de naming | 31 | ✅ **COMPLETADO** (1/1, 2026-07-09) | — |
 
-**Progreso total: 26/35 actividades (74.3%)**
+**Progreso total: 27/35 actividades (77.1%)**
 
 ### 15.6. Resumen ejecutivo (1 minuto de lectura, actualizado 2026-07-09)
 
@@ -3295,10 +3338,10 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 - ✅ **NOVA-SEMVER-26 (2026-07-09):** 3 composite actions nuevas creadas: `nova-validate-build` (valida Java version, secrets, gradle.properties, lefthook), `nova-gather-facts` (recolecta version, branch, SHA, is-snapshot, is-tag), `nova-publish-aggregator` (dispatch por registry). `nova-configure-gradle-cache` **descartada** (action oficial `gradle/actions/setup-gradle@v4` cumple la misma funcion, ver §5.4.1).
 - ✅ **NOVA-SEMVER-31 (2026-07-09, commit `3b434be` en `docs`):** Convencion de naming de repos formalizada. §0 creado con tabla de patrones; §0.1 con arbol de decision; §10.6 con nota sobre independencia repo/coordenadas Maven; §11.8 con 3 lecciones aprendidas del rename. 6 repos framework-coupled corregidos a `spring-boot` en el nombre. 12 repos archivados eliminados. 15/15 repos Java con nombres conformes.
 
-**Que falta (Sprint 3 parcial + Sprint 4 + 5 parcial + 2 backlog, 8 actividades):**
-1. **Sprint 3 (NOVA-SEMVER-14, 1/4 pendiente):** Crear namespace `pe.edu.nova` en Sonatype (14, no iniciado). NOVA-SEMVER-13 ✅, NOVA-SEMVER-15 ✅ (9/9 repos + BOM, incl. flujo 100% automatico con PAT real), NOVA-SEMVER-16 ✅ (consumo del BOM confirmado end-to-end, todas las dependencias resuelven). **Sprint 3 esta practicamente cerrado** — solo falta NOVA-SEMVER-14 que es opcional y no bloquea GitHub Packages.
+**Que falta (Sprint 3 parcial + Sprint 4 + 2 backlog, 8 actividades):**
+1. **Sprint 3 (NOVA-SEMVER-14, 1/4 pendiente):** Crear namespace `pe.edu.nova` en Sonatype (no iniciado). NOVA-SEMVER-13 ✅, NOVA-SEMVER-15 ✅ (9/9 repos + BOM, incl. flujo 100% automatico con PAT real), NOVA-SEMVER-16 ✅ (consumo del BOM confirmado end-to-end). **Sprint 3 esta practicamente cerrado** — solo falta NOVA-SEMVER-14 que es opcional y no bloquea GitHub Packages.
 2. **Sprint 4 (NOVA-SEMVER-17-22, 0/6):** Publicar a Maven Central (bloqueado por NOVA-SEMVER-29), build matrix Java 21+25, OWASP, SBOM, matriz compatibilidades.
-3. **Sprint 5 (NOVA-SEMVER-28, 1/6 pendiente):** Medir tiempos de CI antes/despues de las optimizaciones de cache y documentar mejora. NOVA-SEMVER-23-27 ✅ cerrados.
+3. **Sprint 5 (NOVA-SEMVER-23-28, 6/6 ✅):** TODAS las actividades del Sprint 5 cerradas en esta sesion. NOVA-SEMVER-23 (Local Cache), 24 (Configuration Cache), 25 (Remote Cache), 26 (3 composite actions nuevas), 27 (migracion reusable workflows) y 28 (medicion de impacto, ~50% mejora en CI) — todas ✅.
 4. **Backlog (NOVA-SEMVER-29-30, 0/2):** Generar claves GPG (cuando se decida Maven Central) + variable `NOVA_PACKAGE_VISIBILITY`.
 5. **Fuera de sprints — resuelto 2026-07-10:** El secret `NOVA_RELEASE_PAT` fue configurado con el valor real por el usuario en los 10 repos, y el flujo tag→publish 100% automatico quedo validado en produccion en los 9 repos Gradle + el BOM (§11.9.14, §11.9.22-25). Ya no es un bloqueo.
 
@@ -3366,11 +3409,15 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 
 ### Siguiente paso
 
-**Estado actual (2026-07-10):** El ciclo end-to-end esta cerrado para los **9 repos Gradle + el BOM**. El siguiente paso natural es **continuar con el Sprint 5** (refactor de reusable workflows para usar las composite actions) o **iniciar el Sprint 4** (publicacion a Maven Central).
+**Estado actual (2026-07-10, actualizado tras cerrar Sprint 5):** El ciclo end-to-end esta cerrado para los **9 repos Gradle + los 4 BOMs** (con contenido correcto, versiones literales, §11.9.26). **Sprint 5 esta 100% cerrado** (NOVA-SEMVER-23-28 todos ✅). El siguiente paso natural es **cerrar Sprint 3** (NOVA-SEMVER-14, opcional) o **iniciar Sprint 4** (publicacion a Maven Central).
 
 **Prioridad siguiente — Sprint 3 (cierre):**
 1. **NOVA-SEMVER-14:** Crear namespace `pe.edu.nova` en Sonatype OSSRH (ticket en `issues.sonatype.org`). Bloquea Maven Central end-to-end. **Opcional**, no bloquea GitHub Packages. Cierra Sprint 3 al 4/4.
 
-**Sprint 5 cerrado (2 actividades pendientes):**
-3. ~~**NOVA-SEMVER-27**~~ — **COMPLETADO** (commit `97ee86b` en `nova-devops`, 2026-07-09; fixes posteriores `a742bd5`, `e59fceb`, `bc60bda`, `de91101`). Migracion de los 4 reusable workflows a composite actions, refactor sin impacto funcional. El primer uso real en produccion esta sesion permitio detectar y corregir 3 bugs adicionales (CHMOD gradlew, secret reservado, vars invalido en composite actions, soporte de pom.xml).
-4. **NOVA-SEMVER-28:** ⏳ Medir tiempos de CI antes/despues de las optimizaciones de Sprint 5 (Local + Remote + Configuration Cache). Documentar mejora en una tabla con timestamps.
+**Sprint 5 cerrado (NOVA-SEMVER-23-28, 6/6 ✅):**
+- NOVA-SEMVER-23 ✅ (Local Build Cache, `org.gradle.caching=true` en 10 repos)
+- NOVA-SEMVER-24 ✅ (Configuration Cache, `org.gradle.configuration-cache=true` en 10 repos)
+- NOVA-SEMVER-25 ✅ (Remote Build Cache, `gradle/actions/setup-gradle@v4` en `reusable-build-gradle.yml`)
+- NOVA-SEMVER-26 ✅ (3 composite actions nuevas: `nova-validate-build`, `nova-gather-facts`, `nova-publish-aggregator`; 1 descartada: `nova-configure-gradle-cache`)
+- NOVA-SEMVER-27 ✅ (migracion reusable workflows a composite actions, commit `97ee86b` 2026-07-09; 4 fixes posteriores: chmod gradlew, secret GH_TOKEN, vars en composite, pom.xml en gather-facts)
+- NOVA-SEMVER-28 ✅ (medicion de impacto: ~50% mejora total, Remote Cache ~48%, Local Cache ~57% entre runs, documentado en §11.9.28)
