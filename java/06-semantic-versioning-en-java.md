@@ -583,7 +583,7 @@ grep -l "ahincho/nova-devops.*reusable-release-publish" .github/workflows/publis
 | **Conventional Commits enforcement** | ✅ OK (Sprint 0 + 1) | `commitlint` local via `lefthook prepare` + `reusable-commitlint.yml` en CI |
 | **Generacion de changelog auto** | ✅ OK (Sprint 1) | `reusable-changelog.yml` + `release-please` genera CHANGELOG.md |
 | **GitHub Release auto** | ✅ OK (Sprint 3) | `release-please` crea GitHub Release al mergear PR de release |
-| **Composite actions** | Parcial | 3 implementadas (#5.4 Sprint 1), 4 pendientes (NOVA-SEMVER-26 Sprint 5) |
+| **Composite actions** | ✅ OK | 6 implementadas (#5.4 Sprint 1 + Sprint 5: `nova-setup-java/node/gpg`, `nova-validate-build`, `nova-gather-facts`, `nova-publish-aggregator`). 1 descartada: `nova-configure-gradle-cache` (action oficial `gradle/actions/setup-gradle@v4` la reemplaza, ver §5.4.1) |
 | **Cache de Gradle distribuido** | Parcial | `setup-java` con cache local OK; remote via `gradle/actions` pendiente (NOVA-SEMVER-25) |
 | **Build matrix (multi-Java)** | ⏳ Pendiente | Solo Java 25 (NOVA-SEMVER-19) |
 | **SBOM (CycloneDX)** | ⏳ Pendiente | (NOVA-SEMVER-21) |
@@ -2954,6 +2954,17 @@ pe.edu.nova.java.libs:nova-mapper-utils:1.0.0 (by constraint)
 
 **Patron de limpieza reusable:** el workflow temporal `debug-bom.yml` (commits `7654706`, `9a92cf6`, borrado en `9ac1e95`) demostro que `GITHUB_TOKEN` con `packages: write` SI tiene permisos para borrar versiones de packages via API, aunque el `gh` CLI local del agente no. Para futuras limpiezas: copiar el patron, crear un workflow efimero con `permissions: packages: write`, hacer `gh api --method DELETE`, luego borrar el workflow.
 
+#### 11.9.27. NOVA-SEMVER-27 ya cerrado: migracion de reusable workflows a composite actions (verificada 2026-07-10)
+
+| Campo | Valor |
+|---|---|
+| **Hallazgo durante la auditoria** | Al inspeccionar el alcance real de NOVA-SEMVER-27, se confirma que **el commit `97ee86b` (2026-07-09) ya migro los 4 reusable workflows** (`reusable-build-{gradle,maven}.yml` + `reusable-publish-{gradle,maven}.yml`) a usar las 6 composite actions. La actividad estaba marcada como `⏳ Pendiente` en el roadmap (§12 y §15.5) por error de sincronizacion entre el doc y el repo. |
+| **Evidencia** | `git log --oneline origin/main -- .github/workflows/reusable-build-gradle.yml` muestra el commit `97ee86b feat(workflows): migrate 4 reusable workflows to use composite actions (NOVA-SEMVER-27)` en la historia de los 4 archivos. Inspeccion visual de los archivos actuales confirma que invocan `nova-setup-java@main`, `nova-validate-build@main`, `nova-gather-facts@main` y (los 2 de publish) `nova-publish-aggregator@main`. |
+| **Fixes posteriores que surgieron del primer uso real** | `a742bd5` (chmod +x gradlew en publish workflows), `e59fceb` (rename `GITHUB_TOKEN`→`GH_TOKEN` en la interfaz de los 5 reusable workflows), `bc60bda` (eliminar lectura invalida de `vars` dentro de `nova-publish-aggregator`), `de91101` (soporte de `pom.xml` en `nova-gather-facts`). Todos estos fixes surgieron cuando `nova-bom` intento invocar por primera vez `reusable-publish-maven.yml` (con su `pom.xml` Maven, no `gradle.properties`) — sin ese primer uso real, los bugs habrian seguido latentes. |
+| **Accion tomada en doc 06** | Corregido: NOVA-SEMVER-27 marcado como ✅ en §12, §15.5 (roadmap visual), §15.6 (resumen ejecutivo) y §15.7 (estado verificado). Contador de progreso actualizado de 25/35 (71.4%) a 26/35 (74.3%). Tabla de estado de composite actions en §5.1 actualizada (6 implementadas en lugar de "3+4 pendientes"). |
+| **Leccion** | El roadmap en `docs/` es la fuente de verdad **para lo que se quiere hacer**, pero el `git log` del repo es la fuente de verdad **para lo que ya esta hecho**. Sincronizarlos deberia ser automatico (un script que parsee los commits `[NOVA-SEMVER-NN]` y actualice el doc); mientras tanto, una auditoria manual al inicio de cada sesion evita repetir trabajo o, peor, creer que algo falta cuando ya esta cerrado. |
+| **Estado** | ✅ **Cerrado y sincronizado en doc 06** (2026-07-10). |
+
 ---
 
 ## 12. Roadmap de adopcion (propuesto)
@@ -3024,7 +3035,7 @@ pe.edu.nova.java.libs:nova-mapper-utils:1.0.0 (by constraint)
 24. **NOVA-SEMVER-24:** Habilitar `org.gradle.configuration-cache=true` en los **10 repos Gradle**.
 25. **NOVA-SEMVER-25:** Agregar `gradle/actions/setup-gradle@v4` a `reusable-build-gradle.yml` para usar GitHub Actions Cache.
 26. **NOVA-SEMVER-26:** Crear las **4 composite actions restantes** en `nova-devops/.github/actions/` (`nova-gather-facts`, `nova-publish-aggregator`, `nova-configure-gradle-cache`, `nova-validate-build`; `action.yml` completo, ver seccion 5.5).
-27. **NOVA-SEMVER-27:** Migrar `reusable-build-{gradle,maven}.yml` y `reusable-publish-{gradle,maven}.yml` para usar las composite actions.
+27. **NOVA-SEMVER-27:** ✅ Migrar `reusable-build-{gradle,maven}.yml` y `reusable-publish-{gradle,maven}.yml` para usar las composite actions (commit `97ee86b`, 2026-07-09; fixes posteriores `a742bd5`, `e59fceb`, `bc60bda`, `de91101`). **Verificado el 2026-07-10:** los 4 reusable workflows ya invocan `nova-setup-java`, `nova-validate-build`, `nova-gather-facts` y (los 2 de publish) `nova-publish-aggregator`. Los 3 fixes posteriores (`chmod +x gradlew`, rename de `GITHUB_TOKEN`→`GH_TOKEN` en la interfaz, eliminar lectura invalida de `vars` dentro del composite action, y soporte de `pom.xml` en `nova-gather-facts`) surgieron del primer uso real en produccion esta sesion.
 28. **NOVA-SEMVER-28:** Medir tiempos de CI antes/despues y documentar la mejora.
 
 ### Backlog (futuro, no en sprints activos)
@@ -3108,7 +3119,7 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | Troubleshooting | No documentado | No documentado | ✅ Si, seccion 11 con 9 sub-tablas (11.1-11.9) | Idem | Idem |
 | Firma GPG | No requerida | No requerida | 🟡 Preparada (composite action `nova-setup-gpg` lista + signing plugin en 9 repos), clave NO generada (NOVA-SEMVER-29) | Activada (workflows listos, ejecucion bloqueada hasta generar clave) | Idem |
 | Calidad de codigo (Checkstyle) | No configurado | Idem | ✅ **9/9 repos Gradle** con plugin `checkstyle` aplicado + ruleset comun + exclusion de sourceSet `test` (§11.9.6, corregido 2026-07-10; antes solo 4/9 y sin ruleset funcional) | Idem | Idem |
-| **Total actividades NOVA-SEMVER** | 0 | 4 pre-req (00a-00d) | **25/35 completadas** (4 pre-req + 4 Sprint 0 + 4 Sprint 1 + 4 Sprint 2 + 4 Sprint 3 + 4 Sprint 5 + 1 NOVA-SEMVER-31). NOVA-SEMVER-15 y NOVA-SEMVER-16 pasan a ✅ tras la validacion end-to-end completa de 2026-07-10 en los 9 repos Gradle + los 4 BOMs (§11.9.14, §11.9.22-26). | 28 (01-28) | **35** (4 pre-req + 28 sprints + 2 backlog + 1 NOVA-SEMVER-31) |
+| **Total actividades NOVA-SEMVER** | 0 | 4 pre-req (00a-00d) | **26/35 completadas** (4 pre-req + 4 Sprint 0 + 4 Sprint 1 + 4 Sprint 2 + 4 Sprint 3 + 5 Sprint 5 + 1 NOVA-SEMVER-31). NOVA-SEMVER-15 y NOVA-SEMVER-16 ✅ (validacion end-to-end 9 repos Gradle + 4 BOMs, §11.9.14, §11.9.22-26); NOVA-SEMVER-27 ✅ (migracion reusable workflows a composite actions, commit `97ee86b` 2026-07-09, verificada en produccion esta sesion con 3 fixes posteriores: chmod gradlew, secret GH_TOKEN, vars en composite, pom.xml en gather-facts). | 28 (01-28) | **35** (4 pre-req + 28 sprints + 2 backlog + 1 NOVA-SEMVER-31) |
 | Alcance | — | Solo Java + multi-stack | ✅ Solo Java + multi-stack (NestJS fuera) | Idem | Idem (NestJS en roadmap separado) |
 
 ---
@@ -3160,7 +3171,7 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | 10 archivos `.release-please-config.json` + 10 `.release-please-manifest.json` (uno por repo Gradle) | ✅ OK (NOVA-SEMVER-13, Sprint 3) | ✅ Confirmado con `Test-Path`. commons-starter usa multi-package (3 paquetes) |
 | **29 archivos nuevos de workflow en 10 repos** (`ci.yml` + `release-please.yml` + `publish-on-tag.yml`, este ultimo NO existe en `example`) = 9×3 + 1×2 | ✅ OK (NOVA-SEMVER-13) | ✅ Confirmado con `Get-ChildItem .github/workflows` |
 | Workflow reusable `reusable-release-publish.yml` en `nova-devops` | ✅ OK (NOVA-SEMVER-13) | ✅ Trigger: tag push `vX.Y.Z`, sync version desde tag, `./gradlew publish` |
-| 4 composite actions restantes (`nova-gather-facts`, `nova-publish-aggregator`, `nova-configure-gradle-cache`, `nova-validate-build`) | ⏳ Pendiente (NOVA-SEMVER-26, Sprint 5) | ✅ Disenadas en §5.5 (no implementadas) |
+| 6 composite actions implementadas (`nova-setup-java/node/gpg`, `nova-validate-build`, `nova-gather-facts`, `nova-publish-aggregator`); 1 descartada (`nova-configure-gradle-cache`) | ✅ OK (NOVA-SEMVER-26 Sprint 5, commit `95bc786` 2026-07-09) | Nada — ver §5.4-5.5 para los detalles completos de cada action |
 | 0 archivos `.gradle/build-cache/` ni config de Remote Cache | ⏳ Pendiente (Sprint 5) | ✅ NOVA-SEMVER-23-25 |
 | 0 secrets GPG en GitHub | ⏳ Diferido (NOVA-SEMVER-29) | ✅ Backlog, no urgente |
 | 0 variables `NOVA_PACKAGE_VISIBILITY` configuradas | ⏳ Pendiente (NOVA-SEMVER-30) | ✅ Backlog |
@@ -3221,11 +3232,11 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | **2** | Multi-registry publishing + GPG (preparado) | 09-12 | ✅ **COMPLETADO** (4/4) | — |
 | **3** | Activacion release-please + primer release | 13-16 | 🟡 En curso (3/4) — NOVA-SEMVER-13 ✅, NOVA-SEMVER-15 ✅ (9/9 repos), NOVA-SEMVER-16 ✅ (consumo del BOM confirmado end-to-end). Solo NOVA-SEMVER-14 pendiente | **NOVA-SEMVER-14:** namespace Sonatype (opcional, no bloquea GitHub Packages) |
 | **4** | Publicacion publica + visibilidad configurable | 17-22 | ⏳ Pendiente (0/6) | NOVA-SEMVER-17 (Maven Central, bloqueado por 29) |
-| **5** | Build Cache en GitHub Actions + composite actions | 23-28 | 🟡 **En curso (4/6)** — NOVA-SEMVER-23 ✅, 24 ✅, 25 ✅, 26 ✅, 27 ⏳, 28 ⏳ | NOVA-SEMVER-27: migrar workflows restantes para usar las nuevas composite actions |
+| **5** | Build Cache en GitHub Actions + composite actions | 23-28 | 🟡 **En curso (5/6)** — NOVA-SEMVER-23 ✅, 24 ✅, 25 ✅, 26 ✅, 27 ✅, 28 ⏳ | NOVA-SEMVER-28: medir tiempos de CI antes/despues de las optimizaciones de cache |
 | **Backlog** | GPG firma + variable visibilidad | 29-30 | ⏳ Diferido (0/2) | NOVA-SEMVER-30 (configurar visibilidad default `public`) |
 | **Post-Sprint 0** | Convencion de naming | 31 | ✅ **COMPLETADO** (1/1, 2026-07-09) | — |
 
-**Progreso total: 25/35 actividades (71.4%)**
+**Progreso total: 26/35 actividades (74.3%)**
 
 ### 15.6. Resumen ejecutivo (1 minuto de lectura, actualizado 2026-07-09)
 
@@ -3287,7 +3298,7 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 **Que falta (Sprint 3 parcial + Sprint 4 + 5 parcial + 2 backlog, 8 actividades):**
 1. **Sprint 3 (NOVA-SEMVER-14, 1/4 pendiente):** Crear namespace `pe.edu.nova` en Sonatype (14, no iniciado). NOVA-SEMVER-13 ✅, NOVA-SEMVER-15 ✅ (9/9 repos + BOM, incl. flujo 100% automatico con PAT real), NOVA-SEMVER-16 ✅ (consumo del BOM confirmado end-to-end, todas las dependencias resuelven). **Sprint 3 esta practicamente cerrado** — solo falta NOVA-SEMVER-14 que es opcional y no bloquea GitHub Packages.
 2. **Sprint 4 (NOVA-SEMVER-17-22, 0/6):** Publicar a Maven Central (bloqueado por NOVA-SEMVER-29), build matrix Java 21+25, OWASP, SBOM, matriz compatibilidades.
-3. **Sprint 5 (NOVA-SEMVER-27, 28, 2/6 pendientes):** Migrar workflows restantes para usar las nuevas composite actions (27) + medir tiempos de CI antes/despues y documentar mejora (28).
+3. **Sprint 5 (NOVA-SEMVER-28, 1/6 pendiente):** Medir tiempos de CI antes/despues de las optimizaciones de cache y documentar mejora. NOVA-SEMVER-23-27 ✅ cerrados.
 4. **Backlog (NOVA-SEMVER-29-30, 0/2):** Generar claves GPG (cuando se decida Maven Central) + variable `NOVA_PACKAGE_VISIBILITY`.
 5. **Fuera de sprints — resuelto 2026-07-10:** El secret `NOVA_RELEASE_PAT` fue configurado con el valor real por el usuario en los 10 repos, y el flujo tag→publish 100% automatico quedo validado en produccion en los 9 repos Gradle + el BOM (§11.9.14, §11.9.22-25). Ya no es un bloqueo.
 
@@ -3361,5 +3372,5 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 1. **NOVA-SEMVER-14:** Crear namespace `pe.edu.nova` en Sonatype OSSRH (ticket en `issues.sonatype.org`). Bloquea Maven Central end-to-end. **Opcional**, no bloquea GitHub Packages. Cierra Sprint 3 al 4/4.
 
 **Sprint 5 cerrado (2 actividades pendientes):**
-3. **NOVA-SEMVER-27:** Migrar `reusable-build-{gradle,maven}.yml` y `reusable-publish-{gradle,maven}.yml` para usar las 6 composite actions (`nova-setup-java`, `nova-setup-node`, `nova-validate-build`, `nova-gather-facts`, `nova-publish-aggregator`, `nova-setup-gpg`). Cambio de tipo: refactor, sin impacto funcional. Estos reusable workflows ya fueron ejercitados y depurados por primera vez esta sesion (§11.9.18-20), por lo que ahora es mas seguro migrarlos.
-4. **NOVA-SEMVER-28:** Medir tiempos de CI antes/despues de las optimizaciones de Sprint 5 (Local + Remote + Configuration Cache). Documentar mejora en una tabla con timestamps.
+3. ~~**NOVA-SEMVER-27**~~ — **COMPLETADO** (commit `97ee86b` en `nova-devops`, 2026-07-09; fixes posteriores `a742bd5`, `e59fceb`, `bc60bda`, `de91101`). Migracion de los 4 reusable workflows a composite actions, refactor sin impacto funcional. El primer uso real en produccion esta sesion permitio detectar y corregir 3 bugs adicionales (CHMOD gradlew, secret reservado, vars invalido en composite actions, soporte de pom.xml).
+4. **NOVA-SEMVER-28:** ⏳ Medir tiempos de CI antes/despues de las optimizaciones de Sprint 5 (Local + Remote + Configuration Cache). Documentar mejora en una tabla con timestamps.
