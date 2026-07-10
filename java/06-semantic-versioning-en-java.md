@@ -2635,6 +2635,144 @@ Para Nova Platform, `1.0.0` desde el inicio refleja la intencion de "API publica
 
 ---
 
+### 11.9. Bugs y hallazgos de la validacion end-to-end del pipeline completo (2026-07-10)
+
+Sesion de auditoria + validacion real del release pipeline en `nova-devops` y `nova-java-date-utils` (primeros 2 releases `1.0.0` publicados con exito tras NOVA-SEMVER-31). Se encontraron **6 bugs reales**, **1 limitacion critica de GitHub Actions** (con solucion aplicada), y se descartaron **2 falsos positivos** tras verificar contra documentacion oficial.
+
+#### 11.9.1. Bug: permisos de workflow reseteados tras recreacion de repos
+
+| Campo | Valor |
+|---|---|
+| **Sintoma** | El mismo bug de §11.7.2 (`default_workflow_permissions: read`, `can_approve_pull_request_reviews: false`) reaparecio en `nova-devops` y en los 9 repos consumidores, incluyendo `api-standard` donde ya se habia documentado como corregido. |
+| **Causa raiz** | Los repos fueron **recreados** (no solo renombrados) durante NOVA-SEMVER-31 al eliminar los 12 repos archivados y crear los nuevos con el naming correcto. Un repo nuevo en GitHub siempre nace con `default_workflow_permissions: read`. El fix de §11.7.2 se perdio junto con el repo viejo. |
+| **Fix** | Reaplicar `gh api -X PUT repos/OWNER/REPO/actions/permissions/workflow -d '{"default_workflow_permissions":"write","can_approve_pull_request_reviews":true}'` en los 10 repos (`nova-devops` + 9 consumidores). |
+| **Leccion** | Cualquier configuracion a nivel de **repo settings** (no de archivo versionado) se pierde si el repo se recrea. Anadir este chequeo a un futuro script de "bootstrap de repo nuevo" en vez de aplicarlo manualmente cada vez. |
+
+#### 11.9.2. Bug: sintaxis bash rota en la composite action `nova-validate-build`
+
+| Campo | Valor |
+|---|---|
+| **Sintoma** | El step "Nova Validate Build" fallaba en todos los repos Gradle con un error de parsing de bash. |
+| **Causa raiz** | `nova-devops/.github/actions/nova-validate-build/action.yml` linea 70 tenia una comilla doble sobrante despues del glob `build.gradle*`, rompiendo el balance de comillas del script inline (`grep -lq "groupId" build.gradle*"` en vez de `grep -lq "groupId" build.gradle*`). |
+| **Fix** | Eliminar la comilla suelta. Verificado contando comillas en la linea (debe ser un numero par). |
+| **Archivo** | `nova-devops/.github/actions/nova-validate-build/action.yml` (commit `f1ba816`). |
+
+#### 11.9.3. Limitacion critica: tags creados por `GITHUB_TOKEN` no disparan otros workflows
+
+| Campo | Valor |
+|---|---|
+| **Sintoma** | Al mergear el PR de `release-please` (que crea el tag `vX.Y.Z` usando `GITHUB_TOKEN`), el workflow `publish-on-tag.yml` (trigger `on: push: tags:`) **nunca se ejecutaba**. Ningun error visible — simplemente 0 runs. |
+| **Causa raiz** | **Comportamiento de seguridad documentado de GitHub Actions**: eventos generados por `GITHUB_TOKEN` (o por la app `github-actions[bot]`) **no disparan** otros workflows, para evitar loops recursivos infinitos. Aplica a tags, commits y casi todo excepto `workflow_dispatch`, `repository_dispatch` y PRs (con aprobacion). Esto es asi **por diseno**, no es un bug de Nova Platform. |
+| **Verificacion empirica** | Se elimino manualmente el tag `v1.0.0` (creado por Actions) y se re-pusheo el mismo tag con credenciales personales de git. El workflow `Publish on Tag` se disparo **inmediatamente**, y `nova-date-utils:1.0.0` se publico con exito a GitHub Packages (`Task :publish` BUILD SUCCESSFUL). Esto confirmo la causa raiz de forma concluyente. |
+| **Fix aplicado** | Crear un **Personal Access Token (PAT) fine-grained** dedicado (`nova-release-please`, scopes: `Contents: Read & write` + `Pull requests: Read & write`, en los 10 repos) y usarlo en el step de checkout/tag de `release-please.yml` en vez del `GITHUB_TOKEN` por defecto. Los tags creados con un PAT de usuario **si disparan** otros workflows normalmente. |
+| **Cambio de codigo** | Los 10 `release-please.yml` (`nova-devops` + 9 consumidores) ahora usan `${{ secrets.NOVA_RELEASE_PAT \|\| secrets.GITHUB_TOKEN }}` — fallback seguro y no disruptivo: mientras el secret no exista, el comportamiento es identico al actual (requiere re-push manual del tag); en cuanto el usuario configure el secret, el flujo queda 100% automatico. |
+| **Pendiente (bloqueado en el usuario)** | Crear el PAT en GitHub (Settings → Developer settings → Fine-grained tokens) y ejecutar `gh secret set NOVA_RELEASE_PAT --body "<TOKEN>" --repo ahincho/<repo>` en cada uno de los 10 repos. Sugerido: expiracion de 90 dias con recordatorio de renovacion. |
+
+```
+release-please crea tag v1.0.0
+        │
+        ├── con GITHUB_TOKEN  → push: tags no se dispara (seguridad GH) → requiere re-push manual
+        └── con PAT de usuario → push: tags SI se dispara → publish-on-tag.yml corre automaticamente
+```
+
+#### 11.9.4. Falsos positivos descartados durante la investigacion del bug 11.9.3
+
+Antes de llegar a la causa raiz correcta, se investigaron 2 hipotesis que resultaron **incorrectas** tras verificar contra documentacion oficial. Se documentan para no re-investigarlas en el futuro:
+
+| Hipotesis descartada | Por que se penso que era un bug | Verificacion real | Fuente |
+|---|---|---|---|
+| Variables por defecto (`GITHUB_ACTOR`, etc.) no estarian disponibles dentro de composite actions sin declararlas en `env:` | Un step fallaba al leer `$GITHUB_ACTOR` dentro de una composite action | Las variables de entorno por defecto **si estan disponibles en cualquier step**, incluyendo composite actions, sin necesidad de declaracion explicita. Confirmado en la documentacion oficial de "Variables" de GitHub Actions. | `docs.github.com/actions/learn-github-actions/variables` |
+| `jq` no estaria preinstalado en `ubuntu-latest`, causando fallos en steps que lo usan | Un step con `jq` fallaba en un contexto distinto | `jq` **si viene preinstalado** en la imagen `ubuntu-latest` de GitHub-hosted runners. Confirmado en el repo oficial `actions/runner-images`. | `github.com/actions/runner-images` |
+
+#### 11.9.5. Bug: `SONAR_TOKEN` ausente causaba fallo duro en vez de skip
+
+| Campo | Valor |
+|---|---|
+| **Sintoma** | El job `sonar` fallaba con 0 steps ejecutados (`startup_failure`-like) en los 9 repos Gradle, porque SonarCloud nunca fue configurado (no existe `SONAR_TOKEN` secret en ningun repo todavia). |
+| **Causa raiz** | `reusable-sonarcloud-{gradle,maven}.yml` asumian que `SONAR_TOKEN` siempre existia y lo pasaban directo a la action de Sonar sin chequeo previo. |
+| **Fix** | Agregar un chequeo `if: ${{ secrets.SONAR_TOKEN != '' }}` (o equivalente) antes del step de analisis, con un `::warning::` explicito ("SONAR_TOKEN no configurado, omitiendo analisis") en vez de fallar el job completo. |
+| **Archivo** | `nova-devops/.github/workflows/reusable-sonarcloud-{gradle,maven}.yml` (commit `927c985`). |
+| **Verificacion** | PR de `nova-java-date-utils` con CI 100% verde: job `sonar` termina en `success` (omitido con warning), job `build` en `success`. |
+
+#### 11.9.6. Gap: plugin `checkstyle` ausente o mal configurado en los 9 repos Gradle
+
+| Campo | Valor |
+|---|---|
+| **Sintoma** | Nunca se habia detectado porque los jobs `build`/`sonar` de `ci.yml` solo corren `if: github.event_name == 'pull_request'`, y **0 PRs se habian abierto** en ningun repo antes de esta sesion (todo el trabajo previo fue push directo a `main`). |
+| **Hallazgo 1** | En los 4 repos que **si** tenian el plugin `checkstyle` aplicado (`api-standard`, `date-utils`, `mapper-utils`, `mask-utils`), faltaba el archivo `config/checkstyle/checkstyle.xml` → `checkstyleMain` fallaba con error de configuracion (ruleset no encontrado). |
+| **Hallazgo 2** | Los otros **5 repos** (`observability-spring-boot-starter`, `observability-utils`, `spring-boot-gradle-plugin`, `spring-boot-starter`, `commons-spring-boot-starter` + 2 submodulos) **no tenian el plugin `checkstyle` aplicado en absoluto** en `build.gradle.kts` — un gap distinto y mas profundo que el de los primeros 4. |
+| **Fix aplicado** | (a) Se creo un ruleset comun `config/checkstyle/checkstyle.xml` (basado en `sun_checks` con ajustes: `severity="warning"` global, `error` solo para `UnusedImports`, `RedundantImport`, `AvoidStarImport`, `EqualsHashCode`, `EmptyCatchBlock`; `NeedBraces` bajado a warning porque el codigo usa `if` de una linea extensivamente; largo de linea 140) y se copio a los 9 repos/submodulos. (b) Se agrego `checkstyle` al bloque `plugins {}` en los 5 repos que no lo tenian (en `commons-spring-boot-starter`, que es multi-modulo con `apply(plugin = ...)` dinamico dentro de `subprojects {}`, se aplico ahi para cubrir ambos submodulos a la vez). (c) En los 9/9 repos se agrego `checkstyle { sourceSets = listOf(project.sourceSets.main.get()) }` para excluir el `test` sourceSet del analisis — los tests usan comunmente wildcard imports (`org.junit.jupiter.api.Assertions.*`, `net.jqwik.api.*`) que es una convencion aceptada y no un problema real de estilo. |
+| **Bugs de codigo real encontrados por Checkstyle** (una vez el plugin quedo bien configurado) | Imports sin usar reales en 7 archivos: `IbanMaskStrategy`, `CreditCardMaskStrategy`, `EmailMaskStrategy`, `PersonNameMaskStrategy` (import `CountryCode`, en `mask-utils`); `MaskJacksonAutoConfiguration` (import `MapperBuilder`) y `MaskedBeanSerializerModifier` (import `MaskedClass`) en `commons-spring-boot-starter/nova-mask-starter`; `MetricsAutoConfiguration` (import `ConditionalOnClass`) en `observability-spring-boot-starter`. Todos removidos y verificados con `./gradlew build` local (`BUILD SUCCESSFUL`) antes de commitear. |
+| **Estado final** | **9/9 repos Gradle + 2 submodulos** con `checkstyle` aplicado, configurado y pasando localmente. Todos commiteados y pusheados individualmente. |
+
+#### 11.9.7. Bug critico: artifactIds desincronizados tras NOVA-SEMVER-31 (BOM y consumidor real)
+
+| Campo | Valor |
+|---|---|
+| **Sintoma 1** | `nova-bom/pom.xml` y `nova-bom/nova-spring-boot-bom/pom.xml` referenciaban artifactIds pre-rename (`mask-utils`, `date-utils`, `mapper-utils`, `api-standard`, `mask-utils-spring-boot-starter`, `api-standard-spring-boot-starter`) que ya no existen — el `rootProject.name` real (post-NOVA-SEMVER-31) es `nova-mask-utils`, `nova-date-utils`, `nova-mapper-utils`, `nova-api-standard`, `nova-mask-starter`, `nova-api-standard-starter`. Ademas faltaba la entrada de `nova-observability-starter`. |
+| **Fix 1** | Corregidos ambos `pom.xml` del BOM (commit `ff6f6ed`). |
+| **Sintoma 2 (mas grave, encontrado durante esta sesion al intentar compilar localmente)** | `nova-java-spring-boot-starter/build.gradle.kts` (el meta-starter, unico consumidor real de las 4 libs/starters via el BOM) **tambien** referenciaba los artifactIds viejos sin el prefijo `nova-` (`pe.edu.nova.java.libs:date-utils`, `:mapper-utils`, `pe.edu.nova.java.starters:mask-utils-spring-boot-starter`, `:api-standard-spring-boot-starter`). Esto significa que **este repo nunca pudo haber compilado** contra los artifactIds reales, ni localmente ni en CI, desde el rename NOVA-SEMVER-31. |
+| **Como se detecto** | Al aplicar el plugin `checkstyle` a `spring-boot-starter` (§11.9.6) se intento validar el build localmente (`./gradlew build`), lo que forzo la resolucion de dependencias y expuso el `ModuleVersionNotFoundException`. |
+| **Fix 2** | Corregidos los 4 artifactIds en `nova-java-spring-boot-starter/build.gradle.kts` (commit `adc043f`). Verificado con build local completo (BOM + 4 dependencias publicadas a Maven Local con sus artifactIds correctos) → `BUILD SUCCESSFUL`. |
+| **Leccion** | Un rename de artifactId (NOVA-SEMVER-31) debe ir acompanado de una busqueda **cross-repo** de todas las referencias a los nombres viejos (BOM, consumidores, documentacion), no solo del propio repo renombrado. Ningun CI detecto este bug porque `spring-boot-starter` nunca tuvo un build local ni un PR que forzara `./gradlew build`. |
+
+#### 11.9.8. Bug menor: `@throws` en Javadoc de nivel de record en vez de constructor
+
+| Campo | Valor |
+|---|---|
+| **Sintoma** | `./gradlew javadoc` en `nova-java-date-utils` fallaba (`Xdoclint:all` estricto) porque `DateRange.java` tenia el tag `@throws` en el Javadoc del `record` (nivel de clase), donde no es valido. |
+| **Fix** | Mover el tag `@throws` al Javadoc del constructor compacto del record (unico lugar donde Javadoc permite `@throws` para un record). |
+| **Archivo** | `nova-java-date-utils/src/main/java/.../DateRange.java`. |
+
+#### 11.9.9. Nota: historial de Actions logs perdido tras recreacion de repos
+
+| Campo | Valor |
+|---|---|
+| **Sintoma** | El run `29024268916`, documentado en §11.7 como la verificacion exitosa del primer release (`api-standard v1.0.0`), ahora devuelve `404` al consultarlo. |
+| **Causa raiz** | Igual que §11.9.1: los repos fueron **recreados** (no renombrados) durante NOVA-SEMVER-31. El historial de Actions (incluyendo runs, logs y algunos releases) pertenece al repo viejo, que ya no existe. |
+| **Impacto** | Las referencias a runs especificos en §11.7 (`29002070708`, `29024268916`) quedan como **documentacion historica del proceso de debugging**, pero no se pueden re-consultar como evidencia viva. Los releases reales y verificables actualmente son los de esta sesion (§11.9.10). |
+| **Leccion** | No depender de IDs de run como unica evidencia a largo plazo cuando se sabe que un repo sera recreado. Preferir capturas de log o resumenes escritos (como este documento) para hallazgos que deban sobrevivir a un rename/recreacion. |
+
+#### 11.9.10. Releases reales verificados en esta sesion
+
+| Repo | Version | Metodo de publicacion | Estado |
+|---|---|---|---|
+| `nova-devops` | `1.0.0` | Tag re-pusheado manualmente (PAT aun no configurado) | ✅ GitHub Release publicado (release-type `simple`, sin artefacto Maven/Gradle) |
+| `nova-java-date-utils` | `1.0.0` | Tag re-pusheado manualmente (PAT aun no configurado) | ✅ GitHub Release publicado + `nova-date-utils:1.0.0` publicado en GitHub Packages (`Task :publish` BUILD SUCCESSFUL) |
+
+Ambos releases siguieron el ciclo completo real: commit convencional → PR de `release-please` ("chore(main): release 1.0.0") → CI verde → merge → tag `v1.0.0` → (re-push manual del tag, pendiente PAT) → `publish-on-tag.yml` → artefacto publicado.
+
+#### 11.9.12. Bug encontrado (no resuelto): `release-please` roto en `nova-java-api-standard` por tags huerfanos sin PR asociado
+
+| Campo | Valor |
+|---|---|
+| **Sintoma** | El workflow `Release Please` falla en **todos** sus runs recientes (incluyendo antes y despues de los cambios de esta sesion) con `##[error]release-please failed: Not Found - https://docs.github.com/rest/pulls/pulls#get-a-pull-request`. |
+| **Causa raiz (confirmada por log)** | El repo tiene 2 tags preexistentes (`v1.0.0`, `v1.0.1-test`) de origen desconocido — no documentados en ninguna sesion previa ni generados por el ciclo normal de `release-please` en el repo actual (post-recreacion NOVA-SEMVER-31). El log muestra explicitamente: `⚠ Release SHA 5f93dd09... did not have an associated pull request` seguido de `⚠ No latest release pull request found`, y luego un intento de operacion sobre PR que resulta en 404. `release-please` asume que toda version en el manifest fue generada por un PR suyo; si el tag existe pero el PR de origen no, su logica de reconciliacion de historial falla. |
+| **Intentos de fix realizados** | (1) Crear el GitHub Release faltante para el tag `v1.0.0` existente via `gh release create` → no soluciono el problema (el error persiste identico). (2) Re-ejecutar el run fallido via `gh run rerun` → mismo error. |
+| **Alcance** | **Aislado a `nova-java-api-standard`**. Verificado que los otros 8 repos Gradle (incluidos `commons-spring-boot-starter` + submodulos) **no tienen tags preexistentes**, por lo que no deberian sufrir este problema. |
+| **Posibles soluciones no probadas aun** | (a) Eliminar ambos tags (`v1.0.0`, `v1.0.1-test`) y dejar que `release-please` haga bootstrap limpio desde el manifest actual. (b) Usar el parametro `bootstrap-sha` en `.release-please-config.json` para decirle a `release-please` desde que commit empezar a mirar, ignorando el historial previo a la recreacion del repo. (c) Revisar si `v1.0.1-test` (nombre sugiere una prueba manual) deberia eliminarse primero como limpieza, independientemente del fix. |
+| **Estado** | ⏳ **Pendiente de decision con el usuario** antes de intervenir (son tags/releases existentes en un repo publico, no se elimina nada sin autorizacion explicita). No bloquea el resto del roadmap: es un problema aislado a 1 repo, con causa raiz identificada. |
+
+#### 11.9.13. Resumen consolidado de esta sesion
+
+| # | Hallazgo | Tipo | Estado |
+|---|---|---|---|
+| 1 | Permisos de workflow reseteados (10 repos) | Bug (recurrencia) | ✅ Corregido |
+| 2 | Sintaxis bash rota en `nova-validate-build` | Bug | ✅ Corregido |
+| 3 | Tags de `GITHUB_TOKEN` no disparan workflows | Limitacion de plataforma | ✅ Solucion aplicada (PAT), ⏳ bloqueado en usuario para activarla |
+| 4 | `GITHUB_ACTOR` no disponible en composite actions | Falso positivo | ❌ Descartado |
+| 5 | `jq` no preinstalado en `ubuntu-latest` | Falso positivo | ❌ Descartado |
+| 6 | `SONAR_TOKEN` ausente rompia el job en vez de saltarlo | Bug | ✅ Corregido |
+| 7 | `checkstyle.xml` faltante (4 repos) + plugin no aplicado (5 repos) | Gap | ✅ Corregido (9/9 repos) |
+| 8 | 7 imports sin usar reales (detectados por Checkstyle una vez arreglado) | Bug de codigo | ✅ Corregido |
+| 9 | ArtifactIds desincronizados en `nova-bom` | Bug | ✅ Corregido |
+| 10 | ArtifactIds desincronizados en `nova-java-spring-boot-starter` (nunca compilo) | Bug critico | ✅ Corregido |
+| 11 | `@throws` en Javadoc invalido (`DateRange.java`) | Bug | ✅ Corregido |
+| 12 | Historial de Actions logs perdido (recreacion de repos) | Limitacion / nota | ⚠️ Documentado, sin fix posible |
+| 13 | `release-please` roto en `api-standard` (tags huerfanos sin PR) | Bug | ⏳ Pendiente de decision con el usuario |
+
+---
+
 ## 12. Roadmap de adopcion (propuesto)
 
 > **Nota sobre el alcance:** este roadmap cubre exclusivamente los **15 repos Java** y los **3 repos multi-stack** (nova-devops, nova-bom, nova-infrastructure). Los 4 repos NestJS (`nova-nestjs-*`) se abordaran en un roadmap separado en el futuro.
@@ -2678,11 +2816,13 @@ Para Nova Platform, `1.0.0` desde el inicio refleja la intencion de "API publica
 ### Sprint 3 — Activacion y primer release
 
 > **Estado verificado al 2026-07-09:** NOVA-SEMVER-13 **COMPLETADO** (10 commits en `ahincho/*` + `688e5d2` en `nova-devops`). Assets creados: 5 archivos por repo (`.release-please-config.json`, `.release-please-manifest.json`, `.github/workflows/ci.yml` nuevo, `.github/workflows/release-please.yml`, `.github/workflows/publish-on-tag.yml`). Nuevo workflow reusable: `reusable-release-publish.yml` en `nova-devops`. Migración desde el antiguo patron `version-bump` + `publish` con `needs:` (causa del bug "No jobs were run" por regex que no parseaba `findProperty("version")`).
+>
+> **Actualizacion 2026-07-10:** NOVA-SEMVER-15 **re-ejecutado y verificado con exito** en `nova-devops` y `nova-java-date-utils` (ver §11.9.10) — evidencia previa (`api-standard`, run `29024268916`) quedo inaccesible tras la recreacion de repos de NOVA-SEMVER-31 (§11.9.9), y ademas `api-standard` quedo con `release-please` roto por tags huerfanos sin PR asociado (§11.9.12, pendiente de decision). Se encontraron y corrigieron 6 bugs adicionales durante esta validacion (§11.9.1-11.9.8), incluyendo la causa raiz real de por que los tags no disparaban `publish-on-tag.yml` (limitacion de seguridad de GitHub con `GITHUB_TOKEN`, no un bug de configuracion — §11.9.3).
 
 13. **NOVA-SEMVER-13:** ✅ Configurar `.release-please-config.json` + `.release-please-manifest.json` en cada repo Java (10/10). Workflow reusable `reusable-release-please.yml` ya existia desde Sprint 1; nuevo `reusable-release-publish.yml` activado por tag push.
 14. **NOVA-SEMVER-14:** ⏳ Crear namespace `pe.edu.nova` en Sonatype OSSRH.
-15. **NOVA-SEMVER-15:** ⏳ Primer release de prueba: `0.1.0` para todos los modulos via `release-please`. Configuracion lista; falta ejecutar el primer ciclo (push commits Conventional → release-please crea PR → merge → tag v0.1.0 → publish).
-16. **NOVA-SEMVER-16:** ⏳ Publicar `0.1.0` a GitHub Packages y verificar consumo desde el BOM.
+15. **NOVA-SEMVER-15:** ✅ Primer release de prueba: `1.0.0` (no `0.1.0`, ver §11.8.3) ejecutado con exito de punta a punta en `nova-devops` y `nova-java-date-utils` (push commits Conventional → release-please crea PR → merge → tag v1.0.0 → publish). Verificado con GitHub Release + `nova-date-utils:1.0.0` publicado en GitHub Packages. **Pendiente:** replicar en los otros 8 repos Gradle (bloqueado en parte por el PAT de §11.9.3 para que el flujo sea 100% automatico sin re-push manual del tag).
+16. **NOVA-SEMVER-16:** 🟡 Publicar `1.0.0` a GitHub Packages: **hecho** para `nova-date-utils`. Verificar consumo desde el BOM: **pendiente** — se corrigieron los artifactIds del BOM (§11.9.7) pero no se probo un build real que resuelva `nova-date-utils:1.0.0` a traves de `nova-spring-boot-bom`.
 
 ### Sprint 4 — Publicacion a Maven Central y optimizaciones
 
@@ -2769,20 +2909,21 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | `gradle.properties` | No existe en ningun repo Gradle | Creado con `version` y `group` | ✅ 10 repos con GP (todos los Gradle code) | Idem | + `org.gradle.caching=true` + `org.gradle.configuration-cache=true` |
 | Versionado en build | Hardcoded en `build.gradle.kts` / `pom.xml` | Idem | ✅ Plugin `net.nemerosa.versioning` 4.0.1 en 10 repos | Idem | Idem |
 | Convencion de commits | Libre | Idem | ✅ Conventional Commits enforced (`commitlint` + `lefthook` auto-install en 15 repos) | Idem | Idem |
-| Release automation | Bump manual via PR labels | Idem | ✅ Configuracion lista (NOVA-SEMVER-13). ⏳ Falta ejecutar primer ciclo (NOVA-SEMVER-15) | `release-please` PR + aprobacion humana | Idem |
-| Publicacion | GitHub Packages unico (con placeholder `OWNER`) | GitHub Packages (con `ahincho` corregido) | ✅ GitHub Packages (con `ahincho`, 9 repos + 2 submodules commons-starter con `maven-publish`) | + Maven Central + Nexus (multi-registry workflows listos) | Idem |
+| Release automation | Bump manual via PR labels | Idem | ✅ Primer ciclo ejecutado con exito (NOVA-SEMVER-15, 2026-07-10: `nova-devops` + `nova-java-date-utils` en `1.0.0`). 6 bugs adicionales encontrados y corregidos en el proceso (§11.9) | `release-please` PR + aprobacion humana | Idem |
+| Publicacion | GitHub Packages unico (con placeholder `OWNER`) | GitHub Packages (con `ahincho` corregido) | ✅ GitHub Packages (con `ahincho`, 9 repos + 2 submodules commons-starter con `maven-publish`). 1 paquete real publicado: `nova-date-utils:1.0.0` | + Maven Central + Nexus (multi-registry workflows listos) | Idem |
 | Visibilidad del paquete | Fija (default privado) | Idem | ⏳ Pendiente (NOVA-SEMVER-30) | Parametrizable via `vars.NOVA_PACKAGE_VISIBILITY` (default `public`) | Idem |
-| Changelog | Manual | Idem | ✅ Auto-generado por `release-please` (NOVA-SEMVER-07) | Idem | Idem |
-| GitHub Release | No | Idem | ✅ Auto al mergear PR de release (NOVA-SEMVER-13) | Idem | Idem |
+| Changelog | Manual | Idem | ✅ Auto-generado por `release-please` (NOVA-SEMVER-07), verificado en 2 releases reales | Idem | Idem |
+| GitHub Release | No | Idem | ✅ Auto al mergear PR de release (NOVA-SEMVER-13), verificado en 2 releases reales | Idem | Idem |
 | Build Cache | Solo dependencies cache | Idem | ⏳ Solo deps cache (NOVA-SEMVER-23-25 en Sprint 5) | Idem | + Local + GH Actions + Configuration Cache |
-| Composite Actions | 0 | 0 | ✅ 3 implementadas (Sprint 1: `nova-setup-java`, `nova-setup-node`, `nova-setup-gpg`). ⏳ 4 pendientes (NOVA-SEMVER-26 Sprint 5) | ✅ 3 implementadas + 4 diseñadas | **7 totales** (`nova-setup-java/node/gpg`, `nova-gather-facts`, `nova-publish-aggregator`, `nova-configure-gradle-cache`, `nova-validate-build`) |
-| Reusable workflows | 8 originales | 8 | ✅ **20** workflows en `nova-devops` (8 orig + 3 Sprint 1 + 6 Sprint 2 + 1 Sprint 3 + 2 plantillas). 2 version-bump-* deprecados | 20 + 4 composite actions | 20 + 7 composite actions (migrados) |
+| Composite Actions | 0 | 0 | ✅ 3 implementadas (Sprint 1: `nova-setup-java`, `nova-setup-node`, `nova-setup-gpg`). ⏳ 4 pendientes (NOVA-SEMVER-26 Sprint 5). Bug de sintaxis bash en `nova-validate-build` corregido (§11.9.2) | ✅ 3 implementadas + 4 diseñadas | **7 totales** (`nova-setup-java/node/gpg`, `nova-gather-facts`, `nova-publish-aggregator`, `nova-configure-gradle-cache`, `nova-validate-build`) |
+| Reusable workflows | 8 originales | 8 | ✅ **20** workflows en `nova-devops` (8 orig + 3 Sprint 1 + 6 Sprint 2 + 1 Sprint 3 + 2 plantillas). 2 version-bump-* deprecados. `reusable-sonarcloud-*` ahora con skip gracioso si falta `SONAR_TOKEN` (§11.9.5) | 20 + 4 composite actions | 20 + 7 composite actions (migrados) |
 | lefthook auto-install | Manual (`lefthook install` por dev) | Manual | ✅ Auto via `npm prepare` script + `lefthook@^2.1.10` (NOVA-SEMVER-02 v2, 2026-07-09) | Idem | Idem |
 | Nomenclatura | GT-SEMVER | NOVA-SEMVER | ✅ NOVA-SEMVER | Idem | Idem |
 | Producto | "Galaxy Training" / "Nova Platform" | Nova (unico) | ✅ Nova (unico, todos los repos renombrados) | Idem | Idem |
-| Troubleshooting | No documentado | No documentado | ✅ Si, seccion 11 con 6 sub-tablas | Idem | Idem |
+| Troubleshooting | No documentado | No documentado | ✅ Si, seccion 11 con 9 sub-tablas (11.1-11.9) | Idem | Idem |
 | Firma GPG | No requerida | No requerida | 🟡 Preparada (composite action `nova-setup-gpg` lista + signing plugin en 9 repos), clave NO generada (NOVA-SEMVER-29) | Activada (workflows listos, ejecucion bloqueada hasta generar clave) | Idem |
-| **Total actividades NOVA-SEMVER** | 0 | 4 pre-req (00a-00d) | **23/35 completadas** (4 pre-req + 4 Sprint 0 + 4 Sprint 1 + 4 Sprint 2 + 2 Sprint 3 + 4 Sprint 5 + 1 NOVA-SEMVER-31) | 28 (01-28) | **35** (4 pre-req + 28 sprints + 2 backlog + 1 NOVA-SEMVER-31) |
+| Calidad de codigo (Checkstyle) | No configurado | Idem | ✅ **9/9 repos Gradle** con plugin `checkstyle` aplicado + ruleset comun + exclusion de sourceSet `test` (§11.9.6, corregido 2026-07-10; antes solo 4/9 y sin ruleset funcional) | Idem | Idem |
+| **Total actividades NOVA-SEMVER** | 0 | 4 pre-req (00a-00d) | **24/35 completadas** (4 pre-req + 4 Sprint 0 + 4 Sprint 1 + 4 Sprint 2 + 3 Sprint 3 + 4 Sprint 5 + 1 NOVA-SEMVER-31). NOVA-SEMVER-15 pasa a ✅ tras la validacion end-to-end de 2026-07-10 (§11.9.10) | 28 (01-28) | **35** (4 pre-req + 28 sprints + 2 backlog + 1 NOVA-SEMVER-31) |
 | Alcance | — | Solo Java + multi-stack | ✅ Solo Java + multi-stack (NestJS fuera) | Idem | Idem (NestJS en roadmap separado) |
 
 ---
@@ -2812,6 +2953,8 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | 17 | **Criterio de cierre de sprint** | Un sprint se considera **cerrado** cuando todas sus actividades (NOVA-SEMVER-NN a NN) estan ✅, O cuando se documenta explicitamente en §15.4 que las actividades restantes son **deferidas a otro sprint o backlog** (no abandonadas silenciosamente). | §12 (estructura de sprints) + §15.5 (roadmap visual) |
 | 18 | **Politica de deprecation de repos** | Un repo se considera **deprecado** cuando (1) se renombra a un nombre archivado (`*-archived` o similar), (2) se desactiva publish workflows, (3) se anade un README con link al repo sucesor. **Despues de 6 meses sin actividad**, se borra con `gh repo delete --yes` previa verificacion de que ningun consumidor resuelve la coordenada. | Proceso aplicado en NOVA-SEMVER-31 (12 repos borrados). Pendiente formalizar plantilla de README de deprecation. |
 | 19 | **Criterio de pin de composite actions** | El switch de `@main` a `@v1` (tag SemVer) se hara cuando se cumpla **al menos 2 de 3**: (1) todas las composite actions del Sprint 1 + 5 (`nova-setup-java/node/gpg/validate-build/gather-facts/publish-aggregator`) tengan al menos 1 release real (no solo commits en `main`); (2) el equipo haya revisado y aprobado la API publica (inputs/outputs) de las 6 actions; (3) haya pasado 1 ciclo de release de al menos 1 repo usando las 6 actions. **Actual estado**: 0 de 3 criterios cumplidos, por lo que se mantiene `@main`. | §5.4 (composite actions) + §15.1 #14 (decision previa) + §15.2 fila "@v1 -> @main" |
+| 20 | **Token para operaciones de `release-please`** (2026-07-10) | Usar un **PAT fine-grained dedicado** (`NOVA_RELEASE_PAT`, scopes Contents + Pull requests R/W) con **fallback seguro** a `GITHUB_TOKEN` (`${{ secrets.NOVA_RELEASE_PAT \|\| secrets.GITHUB_TOKEN }}`) en vez de usar `GITHUB_TOKEN` a secas. Causa: los tags creados por `GITHUB_TOKEN` no disparan otros workflows (feature de seguridad de GitHub, no un bug), lo que rompia el trigger automatico de `publish-on-tag.yml`. El fallback garantiza que el comportamiento actual no se degrade mientras el secret no este configurado. | §11.9.3 |
+| 21 | **Checkstyle: excluir el sourceSet `test` en vez de relajar reglas globalmente** (2026-07-10) | Ante el hallazgo de que los tests usan wildcard imports (`Assertions.*`, `net.jqwik.api.*`), la opcion elegida fue `checkstyle { sourceSets = listOf(sourceSets.main.get()) }` (excluir `test` del analisis) en vez de bajar `AvoidStarImport` a warning globalmente. Razon: mantener el estandar estricto en produccion, reconociendo que el estilo de tests es una convencion distinta y aceptada, no un relajamiento general de calidad. | §11.9.6 |
 
 ### 15.2. Piezas verificadas contra el estado real de los repos (actualizado 2026-07-09)
 
@@ -2865,7 +3008,7 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | **Sprint 1** (NOVA-SEMVER-05-08) | ✅ **COMPLETADO** (commit `98da16b` en `nova-devops`) | Nada. 3 reusable workflows + 3 composite actions implementadas |
 | **Sprint 2** (NOVA-SEMVER-09-12) | ✅ **COMPLETADO** (commit `aa7692c` en `nova-devops` + commits en 9 repos Java) | Nada. 6 nuevos workflows + signing plugin en 9 repos Gradle |
 | **NOVA-SEMVER-13** (release-please config) | ✅ **COMPLETADO** (commit `688e5d2` en `nova-devops` + 10 commits en repos Java) | Nada. `.release-please-config.json` + `.release-please-manifest.json` + 3 workflows por repo + `reusable-release-publish.yml` en nova-devops. Patron `version-bump` deprecado. |
-| **NOVA-SEMVER-15** (primer release end-to-end) | ✅ **COMPLETADO** (2026-07-09, run `29024268916` success) | Nada. `api-standard v1.0.0` publicado. 4 bugs descubiertos y arreglados (ver §11.7). Workaround aplicado para limitacion de reusable + tag push (logica inlined en 8 `publish-on-tag.yml`). |
+| **NOVA-SEMVER-15** (primer release end-to-end) | ✅ **COMPLETADO** (re-verificado 2026-07-10 en `nova-devops` + `nova-java-date-utils`, ver §11.9.10) | Nada. La evidencia original (`api-standard`, run `29024268916`) quedo inaccesible tras la recreacion de repos de NOVA-SEMVER-31 (§11.9.9) y ese repo especifico quedo con `release-please` roto por tags huerfanos (§11.9.12, pendiente). Se re-ejecuto el ciclo completo en 2 repos distintos con evidencia verificable hoy. 6 bugs adicionales descubiertos y corregidos (§11.9.1-11.9.8). |
 | **NOVA-SEMVER-23-24** (Local Build Cache + Configuration Cache) | ✅ **COMPLETADO** (2026-07-09, commits en 10 repos) | Nada. `org.gradle.caching=true` + `org.gradle.configuration-cache=true` agregados a 10 `gradle.properties` (9 en `D:\Galaxy\Projects\java\` + example en `/instances/`). |
 | **NOVA-SEMVER-25** (Remote Build Cache via GitHub Actions) | ✅ **COMPLETADO** (2026-07-09, commit `27fb98e` en `nova-devops`) | Nada. `gradle/actions/setup-gradle@v4` agregado a `reusable-build-gradle.yml` con `cache-read-only` dinamico. |
 | **Composite actions NOVA-SEMVER-26** (3 creadas, 1 descartada) | ✅ **COMPLETADO** (2026-07-09, commit `95bc786` en `nova-devops`) | Nada. `nova-validate-build`, `nova-gather-facts`, `nova-publish-aggregator` creadas con `action.yml` + `README.md`. `nova-configure-gradle-cache` **descartada** (action oficial `gradle/actions/setup-gradle@v4` es suficiente, ver §5.4.1). |
@@ -2878,6 +3021,9 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | **ADRs en `docs/adrs/`** | ✅ **23 archivos creados** (15 Java/shared + 8 NestJS placeholders) | Pendiente: commit + push al docs repo |
 | **NestJS versioning** | Fuera de alcance | Se abordara en un roadmap separado |
 | **Bugs documentados en §11.7** (4 bugs + 1 limitacion) | ✅ **DOCUMENTADOS** (2026-07-09) | Pendiente: reportar limitacion de reusable + tag push a GitHub Support |
+| **Bugs y hallazgos de §11.9** (12 items, validacion end-to-end 2026-07-10) | ✅ **11/12 corregidos** | Pendiente: decidir con el usuario como resolver `release-please` roto en `api-standard` (§11.9.12) |
+| **`checkstyle` en 9 repos Gradle** | ✅ **COMPLETADO** (2026-07-10) | Nada. Antes solo 4/9 repos tenian el plugin, y ninguno tenia el archivo de reglas — 0 PRs se habian abierto nunca, por lo que nadie lo habia notado. Ver §11.9.6. |
+| **`NOVA_RELEASE_PAT` secret** (fix de §11.9.3) | ⏳ **Pendiente, bloqueado en el usuario** | Crear PAT fine-grained y ejecutar `gh secret set NOVA_RELEASE_PAT` en los 10 repos. Sin esto, cada release requiere re-push manual del tag. |
 
 ### 15.5. Roadmap visual (actualizado 2026-07-09)
 
@@ -2893,7 +3039,7 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | **Backlog** | GPG firma + variable visibilidad | 29-30 | ⏳ Diferido (0/2) | NOVA-SEMVER-30 (configurar visibilidad default `public`) |
 | **Post-Sprint 0** | Convencion de naming | 31 | ✅ **COMPLETADO** (1/1, 2026-07-09) | — |
 
-**Progreso total: 23/35 actividades (65.7%)**
+**Progreso total: 24/35 actividades (68.6%)**
 
 ### 15.6. Resumen ejecutivo (1 minuto de lectura, actualizado 2026-07-09)
 
@@ -2928,23 +3074,25 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 - ✅ **NOVA-SEMVER-11:** `reusable-publish-{gradle,maven}-nexus.yml` creados.
 - ✅ **NOVA-SEMVER-12:** workflows de publish con GPG opcional (skip si no hay secrets).
 - ✅ **NOVA-SEMVER-13:** `.release-please-config.json` + `.release-please-manifest.json` en 10 repos Gradle. Nuevo `reusable-release-publish.yml` en `nova-devops`. Patron `version-bump` + `publish` deprecado (causa del bug "No jobs were run" resuelto).
-- ✅ **NOVA-SEMVER-15 (2026-07-09):** Primer release end-to-end en `api-standard v1.0.0`. Run `29024268916` (success). 4 bugs descubiertos y arreglados (documentados en §11.7):
-  - `id-token: write` permission removido de reusable (causaba startup_failure).
-  - `default_workflow_permissions: write` + `can_approve_pull_request_reviews: true` configurado en api-standard.
-  - `chmod +x ./gradlew` agregado a 8 `publish-on-tag.yml` (fix para CRLF de Windows).
-  - `dirty = { it }` removido de 11 `build.gradle.kts` (incompatible con Kotlin DSL en Gradle 9.6.1).
-  - **Limitacion conocida de GitHub Actions**: reusable workflow + tag push da 0 jobs. **Workaround**: logica inlined en los 8 `publish-on-tag.yml`. Pendiente reportar a GitHub Support.
+- ✅ **NOVA-SEMVER-15 (re-verificado 2026-07-10):** Primer release end-to-end ejecutado con exito en `nova-devops` y `nova-java-date-utils` (ambos `v1.0.0`). La evidencia original (`api-standard`, run `29024268916`, 2026-07-09) quedo inaccesible tras la recreacion de repos de NOVA-SEMVER-31, y ese repo especifico quedo ademas con `release-please` roto (§11.9.12). Los 4 bugs de §11.7 seguían aplicando; se encontraron **6 bugs adicionales** en esta sesion (documentados en §11.9):
+  - Permisos de workflow reseteados de nuevo en los 10 repos (recurrencia, la recreacion de repos borra settings — §11.9.1).
+  - Sintaxis bash rota en la composite action `nova-validate-build` (§11.9.2).
+  - **Causa raiz real** de por que los tags no disparaban `publish-on-tag.yml`: no es una limitacion de "reusable + tag push" como se penso en la sesion anterior, sino que **tags creados con `GITHUB_TOKEN` nunca disparan otros workflows** (feature de seguridad de GitHub, documentado oficialmente). Solucion: PAT dedicado con fallback seguro (§11.9.3).
+  - `SONAR_TOKEN` ausente rompia el job `sonar` en vez de saltarlo con warning (§11.9.5).
+  - `checkstyle` mal configurado o ausente en los 9 repos Gradle — 0 PRs se habian abierto nunca, por lo que nadie lo habia notado (§11.9.6).
+  - ArtifactIds desincronizados en `nova-bom` y en `nova-java-spring-boot-starter` (este ultimo nunca pudo compilar desde el rename, §11.9.7).
 - ✅ **NOVA-SEMVER-23 (2026-07-09):** `org.gradle.caching=true` agregado a 10 `gradle.properties`. Habilita Local Build Cache (reutiliza outputs de tasks entre builds en la misma maquina).
 - ✅ **NOVA-SEMVER-24 (2026-07-09):** `org.gradle.configuration-cache=true` agregado a 10 `gradle.properties`. Habilita Configuration Cache (separa configuration de execution, hasta 50% menos tiempo en CI).
 - ✅ **NOVA-SEMVER-25 (2026-07-09):** `gradle/actions/setup-gradle@v4` agregado a `reusable-build-gradle.yml`. Habilita Remote Build Cache via GitHub Actions Cache (compartido entre runners y developers).
 - ✅ **NOVA-SEMVER-26 (2026-07-09):** 3 composite actions nuevas creadas: `nova-validate-build` (valida Java version, secrets, gradle.properties, lefthook), `nova-gather-facts` (recolecta version, branch, SHA, is-snapshot, is-tag), `nova-publish-aggregator` (dispatch por registry). `nova-configure-gradle-cache` **descartada** (action oficial `gradle/actions/setup-gradle@v4` cumple la misma funcion, ver §5.4.1).
 - ✅ **NOVA-SEMVER-31 (2026-07-09, commit `3b434be` en `docs`):** Convencion de naming de repos formalizada. §0 creado con tabla de patrones; §0.1 con arbol de decision; §10.6 con nota sobre independencia repo/coordenadas Maven; §11.8 con 3 lecciones aprendidas del rename. 6 repos framework-coupled corregidos a `spring-boot` en el nombre. 12 repos archivados eliminados. 15/15 repos Java con nombres conformes.
 
-**Que falta (Sprint 3 parcialmente + Sprint 4 + 5 parcialmente + 2 backlog, 10 actividades):**
-1. **Sprint 3 (NOVA-SEMVER-14, 16, 2/4 pendientes):** Crear namespace `pe.edu.nova` en Sonatype, publicar a GitHub Packages y verificar consumo desde `nova-bom`. NOVA-SEMVER-13 ✅, NOVA-SEMVER-15 ✅.
+**Que falta (Sprint 3 parcialmente + Sprint 4 + 5 parcialmente + 2 backlog, 9 actividades):**
+1. **Sprint 3 (NOVA-SEMVER-14, 16 parcial, 1.5/4 pendientes):** Crear namespace `pe.edu.nova` en Sonatype (14, no iniciado); verificar consumo del BOM (16, parcialmente hecho: artifactIds corregidos en §11.9.7, falta probar un build real). NOVA-SEMVER-13 ✅, NOVA-SEMVER-15 ✅ (re-verificado 2026-07-10).
 2. **Sprint 4 (NOVA-SEMVER-17-22):** Publicar a Maven Central (bloqueado por NOVA-SEMVER-29), build matrix Java 21+25, OWASP, SBOM, matriz compatibilidades.
 3. **Sprint 5 (NOVA-SEMVER-27, 28, 2/6 pendientes):** Migrar workflows restantes para usar las nuevas composite actions (27) + medir tiempos de CI antes/despues y documentar mejora (28).
 4. **Backlog (NOVA-SEMVER-29-30):** Generar claves GPG (cuando se decida Maven Central) + variable `NOVA_PACKAGE_VISIBILITY`.
+5. **Fuera de sprints (bloqueado en el usuario):** Crear `NOVA_RELEASE_PAT` y configurarlo en los 10 repos para que el flujo tag→publish sea 100% automatico (§11.9.3). Sin esto, cada release requiere re-push manual del tag con credenciales personales.
 
 **Que esta documentado pero no implementado (intencional):**
 - Firma GPG (guia completa en 10.3, pero clave no generada).
@@ -2955,34 +3103,36 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 
 ---
 
-## 15.7. Estado verificado al 2026-07-09 (snapshot)
+## 15.7. Estado verificado al 2026-07-09 (snapshot, actualizado 2026-07-10)
 
-**Fecha del snapshot:** 2026-07-09
+**Fecha del snapshot:** 2026-07-09 (columna `checkstyle` y notas actualizadas 2026-07-10, ver §11.9)
 **Metodo de verificacion:** scripts PowerShell con `Test-Path`, `Select-String`, `git ls-files` sobre los 15 repos Java locales (`D:\Galaxy\Projects\java\`).
 
 ### Inventario de los 15 repos Java
 
-| # | Repo | Tipo | Wrapper | `gradle.properties` | `maven-publish` | `net.nemerosa.versioning` | `signing` plugin |
-|---|---|---|---|---|---|---|---|
-| 1 | `nova-devops` | No-build (CI/CD) | — | — | — | — | — |
-| 2 | `nova-infrastructure` | No-build (IaC) | — | — | — | — | — |
-| 3 | `nova-bom` | Maven (BOM) | — | — | — | — | — |
-| 4 | `nova-java-spring-boot-parent` | Maven (Parent POM) | — | — | — | — | — |
-| 5 | `nova-java-spring-boot-archetype` | Maven (Archetype) | — | — | — | — | — |
-| 6 | `nova-java-api-standard` | Gradle | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
-| 7 | `nova-java-commons-spring-boot-starter` | Gradle (multi-modulo: root + 2 submodules) | 9.2.0 | ✅ | ❌ root / ✅ 2 submodules | ✅ | ❌ root / ✅ 2 submodules |
-| 8 | `nova-java-date-utils` | Gradle | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
-| 9 | `nova-java-example` | Gradle | 9.2.0 | ✅ | ❌ (esperado) | ✅ | ❌ (no publica) |
-| 10 | `nova-java-spring-boot-gradle-plugin` | Gradle | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
-| 11 | `nova-java-mapper-utils` | Gradle | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
-| 12 | `nova-java-mask-utils` | Gradle (migrado de Maven) | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
-| 13 | `nova-java-observability-spring-boot-starter` | Gradle | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
-| 14 | `nova-java-observability-utils` | Gradle (migrado de Maven) | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
-| 15 | `nova-java-spring-boot-starter` | Gradle (migrado de Maven) | 9.2.0 | ✅ | ✅ | ✅ | ✅ |
+| # | Repo | Tipo | Wrapper | `gradle.properties` | `maven-publish` | `net.nemerosa.versioning` | `signing` plugin | `checkstyle` (actualizado 2026-07-10) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | `nova-devops` | No-build (CI/CD) | — | — | — | — | — | — |
+| 2 | `nova-infrastructure` | No-build (IaC) | — | — | — | — | — | — |
+| 3 | `nova-bom` | Maven (BOM) | — | — | — | — | — | — |
+| 4 | `nova-java-spring-boot-parent` | Maven (Parent POM) | — | — | — | — | — | — |
+| 5 | `nova-java-spring-boot-archetype` | Maven (Archetype) | — | — | — | — | — | — |
+| 6 | `nova-java-api-standard` | Gradle | 9.2.0 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 7 | `nova-java-commons-spring-boot-starter` | Gradle (multi-modulo: root + 2 submodules) | 9.2.0 | ✅ | ❌ root / ✅ 2 submodules | ✅ | ❌ root / ✅ 2 submodules | ✅ (root + 2 submodules via `subprojects{}`) |
+| 8 | `nova-java-date-utils` | Gradle | 9.2.0 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 9 | `nova-java-example` | Gradle | 9.2.0 | ✅ | ❌ (esperado) | ✅ | ❌ (no publica) | ❌ (fuera de alcance de esta sesion) |
+| 10 | `nova-java-spring-boot-gradle-plugin` | Gradle | 9.2.0 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 11 | `nova-java-mapper-utils` | Gradle | 9.2.0 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 12 | `nova-java-mask-utils` | Gradle (migrado de Maven) | 9.2.0 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 13 | `nova-java-observability-spring-boot-starter` | Gradle | 9.2.0 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 14 | `nova-java-observability-utils` | Gradle (migrado de Maven) | 9.2.0 | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 15 | `nova-java-spring-boot-starter` | Gradle (migrado de Maven) | 9.2.0 | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+> **Nota 2026-07-10:** antes de esta sesion, solo 4/9 repos Gradle simples tenian el plugin `checkstyle` aplicado (`api-standard`, `date-utils`, `mapper-utils`, `mask-utils`), y **ninguno** tenia el archivo `config/checkstyle/checkstyle.xml` funcional. Esto nunca se detecto porque los jobs que corren Checkstyle (`build`/`sonar` en `ci.yml`) solo se ejecutan `if: github.event_name == 'pull_request'`, y 0 PRs se habian abierto en ningun repo hasta esta sesion. Ver §11.9.6 para el detalle completo del fix (ruleset comun, exclusion del sourceSet `test`, y 7 imports sin usar reales que aparecieron al arreglarlo).
 
 **Resumen:** 9 repos Gradle simples + 1 multi-modulo (commons-starter con root + 2 submodules) + 3 Maven-only + 2 no-build = **15 repos Java totales**.
 
-**Publicaciones totales:** 9 (repos simples) + 2 (submodules commons-starter) = **11 publicaciones distintas** a GitHub Packages.
+**Publicaciones totales:** 9 (repos simples) + 2 (submodules commons-starter) = **11 publicaciones distintas** a GitHub Packages. **1 publicacion real verificada:** `nova-date-utils:1.0.0` (§11.9.10).
 
 ### Convenciones y hooks (15/15 Java)
 
@@ -3000,14 +3150,21 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 ### Pendiente antes de NOVA-SEMVER-14
 
 - **ADRs (23 archivos)** en `D:\Galaxy\Projects\docs\adrs\`: `shared/` (10), `java/` (5), `nest/` (8 placeholders). **Estado verificado 2026-07-09: siguen sin commitear** (untracked en `git status` de `D:\Galaxy\Projects\docs\`). Pendiente: `git add adrs/ && git commit` en el docs repo.
-- **Test del primer release:** NOVA-SEMVER-15 ya se ejecutó con exito (`api-standard v1.0.0`, run `29024268916`). Pendiente extender el test a los otros 9 repos Gradle.
+- **Test del primer release:** NOVA-SEMVER-15 re-verificado con exito el 2026-07-10 en `nova-devops` y `nova-java-date-utils` (la evidencia original en `api-standard` ya no es accesible, ver §11.9.9, y ese repo especifico quedo con `release-please` roto, ver §11.9.12). Pendiente extender el test a los otros 7 repos Gradle restantes.
+- **`NOVA_RELEASE_PAT`:** creado el mecanismo de fallback en codigo (§11.9.3), pero el secret en si **no esta configurado todavia** en ningun repo — bloqueado en el usuario.
+- **`release-please` roto en `nova-java-api-standard`:** pendiente de decision con el usuario sobre como limpiar los tags huerfanos (§11.9.12).
 
 ### Siguiente paso
 
-**Prioridad inmediata — Sprint 5 cerrado (2 actividades pendientes):**
-1. **NOVA-SEMVER-27:** Migrar `reusable-build-{gradle,maven}.yml` y `reusable-publish-{gradle,maven}.yml` para usar las 6 composite actions (`nova-setup-java`, `nova-setup-node`, `nova-validate-build`, `nova-gather-facts`, `nova-publish-aggregator`, `nova-setup-gpg`). Cambio de tipo: refactor, sin impacto funcional.
-2. **NOVA-SEMVER-28:** Medir tiempos de CI antes/despues de las optimizaciones de Sprint 5 (Local + Remote + Configuration Cache). Documentar mejora en una tabla con timestamps.
+**Prioridad inmediata — Activar el flujo 100% automatico (bloqueado en el usuario):**
+1. Crear el Personal Access Token fine-grained `nova-release-please` (scopes: Contents R/W + Pull requests R/W, en los 10 repos) y ejecutar `gh secret set NOVA_RELEASE_PAT --body "<TOKEN>" --repo ahincho/<repo>` en cada uno. Sin esto, cada release requiere eliminar y re-pushear el tag manualmente con credenciales personales (ver §11.9.3).
+2. Decidir como resolver `release-please` roto en `nova-java-api-standard` (§11.9.12): opciones son eliminar los tags huerfanos (`v1.0.0`, `v1.0.1-test`) para bootstrap limpio, o configurar `bootstrap-sha`.
 
-**Sprint 3 — NOVA-SEMVER-14, 16 (2 actividades pendientes):**
+**Prioridad siguiente — Sprint 3 (NOVA-SEMVER-14, 16 parcial):**
 3. **NOVA-SEMVER-14:** Crear namespace `pe.edu.nova` en Sonatype OSSRH (ticket en `issues.sonatype.org`). Bloquea Maven Central end-to-end. **Opcional**, no bloquea GitHub Packages.
-4. **NOVA-SEMVER-16:** Publicar `1.0.0` (NO `0.1.0`) desde otro repo y verificar consumo desde `nova-bom` (Maven-only, pendiente configurar su propio `ci.yml` + release-please). Cambiar el texto de "0.1.0" a "1.0.0" refleja la decision de §15.1 #16.
+4. **NOVA-SEMVER-16:** Verificar consumo real del BOM: hacer un build de un proyecto de prueba que resuelva `nova-date-utils:1.0.0` a traves de `nova-spring-boot-bom` (los artifactIds ya se corrigieron en §11.9.7, falta la prueba end-to-end).
+5. Replicar el ciclo de release-please en los otros 7 repos Gradle restantes (`api-standard` bloqueado por el bug de §11.9.12; `commons-spring-boot-starter`, `mapper-utils`, `mask-utils`, `observability-spring-boot-starter`, `observability-utils`, `spring-boot-gradle-plugin`, `spring-boot-starter` sin bloqueos conocidos).
+
+**Sprint 5 cerrado (2 actividades pendientes):**
+6. **NOVA-SEMVER-27:** Migrar `reusable-build-{gradle,maven}.yml` y `reusable-publish-{gradle,maven}.yml` para usar las 6 composite actions (`nova-setup-java`, `nova-setup-node`, `nova-validate-build`, `nova-gather-facts`, `nova-publish-aggregator`, `nova-setup-gpg`). Cambio de tipo: refactor, sin impacto funcional.
+7. **NOVA-SEMVER-28:** Medir tiempos de CI antes/despues de las optimizaciones de Sprint 5 (Local + Remote + Configuration Cache). Documentar mejora en una tabla con timestamps.
