@@ -9,6 +9,7 @@ docs/adrs/
   shared/      Decisiones cross-stack (Java + NestJS)
   java/        Decisiones especificas del stack Java
   nest/        Decisiones especificas del stack NestJS
+  versioning/  Decisiones de politica de versionado (cross-stack)
 ```
 
 ## Convenciones
@@ -51,6 +52,14 @@ Decisiones especificas del stack Java (Spring Boot, Quarkus, Micronaut).
 
 *ADR-003 tiene un concern abierto sobre soportar Java 21 LTS como minimo.
 
+## ADRs de Versioning (`versioning/`)
+
+Decisiones sobre politica de versionado y bump. Actualmente exclusivo del stack Java; NestJS tendra su propio ADR cuando ese stack entre en alcance.
+
+| # | ADR | Estado | Tema |
+|---|---|---|---|
+| 018 | [Politica de Versioning y Bump para Nova Platform](versioning/ADR-018-politica-de-versioning-y-bump.md) | Aceptada (implementada) | Versioning |
+
 ## ADRs NestJS (`nest/`)
 
 Decisiones especificas del stack NestJS. Stack fuera de alcance actual (Sprint 0+ solo Java).
@@ -59,12 +68,12 @@ Decisiones especificas del stack NestJS. Stack fuera de alcance actual (Sprint 0
 |---|---|---|---|
 | 016 | [Node.js 22 LTS como Version Objetivo](nest/ADR-016-node-version-objetivo.md) | Pendiente | Build System |
 | 017 | [pnpm como Package Manager](nest/ADR-017-pnpm-package-manager.md) | Pendiente | Build System |
-| 018 | [NestJS 10.x como Framework Backend](nest/ADR-018-nestjs-framework.md) | Pendiente | Framework |
 | 019 | [TypeScript 5.x en Modo Estricto](nest/ADR-019-typescript-estricto.md) | Pendiente | Lenguaje |
 | 020 | [ORM para Persistencia](nest/ADR-020-orm-persistencia.md) | Pendiente | Persistencia |
 | 021 | [Jest como Framework de Testing](nest/ADR-021-jest-testing.md) | Pendiente | Testing |
 | 022 | [ESLint + Prettier + Husky](nest/ADR-022-eslint-prettier-husky.md) | Pendiente | Calidad |
 | 023 | [Swagger/OpenAPI](nest/ADR-023-swagger-openapi.md) | Pendiente | Documentacion |
+| 024 | [NestJS 10.x como Framework Backend](nest/ADR-024-nestjs-framework.md) | Pendiente | Framework |
 
 ## Formato
 

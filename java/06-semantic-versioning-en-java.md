@@ -3035,7 +3035,7 @@ pe.edu.nova.java.libs:nova-mapper-utils:1.0.0 (by constraint)
 
 ## 12. Roadmap de adopcion (propuesto)
 
-> **Estado del roadmap al 2026-07-12 (decision formalizada, §11.9.29):** 27 actividades implementadas + 3 canceladas por decision documentada (NOVA-SEMVER-14, 17, 29 — consecuencia de descartar Maven Central y mantener GitHub Packages como registry permanente). **Progreso efectivo: 27/32 (84.4%)** sobre el total ajustado. La unica actividad abierta es NOVA-SEMVER-30 (variable `NOVA_PACKAGE_VISIBILITY`, opcional, default ya cubre el caso).
+> **Estado del roadmap al 2026-07-12 (decision formalizada, §11.9.29):** 28 actividades implementadas + 3 canceladas por decision documentada (NOVA-SEMVER-14, 17, 29 — consecuencia de descartar Maven Central y mantener GitHub Packages como registry permanente). **Progreso efectivo: 28/32 (87.5%)** sobre el total ajustado. Actividades abiertas: NOVA-SEMVER-19-22 (Sprint 4, en curso) y NOVA-SEMVER-30 (backlog, opcional).
 
 > **Nota sobre el alcance:** este roadmap cubre exclusivamente los **15 repos Java** y los **3 repos multi-stack** (nova-devops, nova-bom, nova-infrastructure). Los 4 repos NestJS (`nova-nestjs-*`) se abordaran en un roadmap separado en el futuro.
 
@@ -3091,7 +3091,7 @@ pe.edu.nova.java.libs:nova-mapper-utils:1.0.0 (by constraint)
 ### Sprint 4 — Publicacion a Maven Central y optimizaciones
 
 17. **NOVA-SEMVER-17:** ❌ **CANCELLED** (§11.9.29). Publicar a Maven Central via Sonatype Central Portal — descartado por decision del usuario (misma razon que NOVA-SEMVER-14).
-18. **NOVA-SEMVER-18:** Documentar politica de bump en `docs/adr/ADR-011-versioning.md`.
+18. **NOVA-SEMVER-18:** ✅ Documentar politica de bump. Hecho en `docs/adrs/versioning/ADR-018-politica-de-versioning-y-bump.md` (2026-07-09, "Aceptada (implementada)"), ya referenciado en §11.8.3 y §11.9.17 como "politica ADR-018". Cubre version inicial (1.0.0, no 0.x.y), mapa commit-type→bump, no pre-releases, manejo de bugs post-release, breaking changes con el BOM coordinador, y formato de tags.
 19. **NOVA-SEMVER-19:** Crear `reusable-build-matrix.yml` (Java 21 + 25).
 20. **NOVA-SEMVER-20:** Crear `reusable-owasp-check.yml` (CVEs).
 21. **NOVA-SEMVER-21:** Crear `reusable-sbom.yml` (CycloneDX).
@@ -3185,9 +3185,9 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | Nomenclatura | GT-SEMVER | NOVA-SEMVER | ✅ NOVA-SEMVER | Idem | Idem |
 | Producto | "Galaxy Training" / "Nova Platform" | Nova (unico) | ✅ Nova (unico, todos los repos renombrados) | Idem | Idem |
 | Troubleshooting | No documentado | No documentado | ✅ Si, seccion 11 con 9 sub-tablas (11.1-11.9) | Idem | Idem |
-| Firma GPG | No requerida | No requerida | 🟡 Preparada (composite action `nova-setup-gpg` lista + signing plugin en 9 repos), clave NO generada (NOVA-SEMVER-29) | Activada (workflows listos, ejecucion bloqueada hasta generar clave) | Idem |
+| Firma GPG | No requerida | No requerida | ❌ **CANCELLED** (NOVA-SEMVER-29, §11.9.29): GitHub Packages no requiere firma; se descarto indefinidamente junto con Maven Central. Composite action `nova-setup-gpg` y signing plugin en 9 repos quedan sin uso activo (preparados pero no se generara la clave). | N/A (cancelado) | Idem |
 | Calidad de codigo (Checkstyle) | No configurado | Idem | ✅ **9/9 repos Gradle** con plugin `checkstyle` aplicado + ruleset comun + exclusion de sourceSet `test` (§11.9.6, corregido 2026-07-10; antes solo 4/9 y sin ruleset funcional) | Idem | Idem |
-| **Total actividades NOVA-SEMVER** | 0 | 4 pre-req (00a-00d) | **27/35 completadas** (4 pre-req + 4 Sprint 0 + 4 Sprint 1 + 4 Sprint 2 + 4 Sprint 3 + 6 Sprint 5 + 1 NOVA-SEMVER-31). NOVA-SEMVER-15/16/27/28 ✅ cerrados esta sesion. | 28 (01-28) | **35** (4 pre-req + 28 sprints + 2 backlog + 1 NOVA-SEMVER-31) |
+| **Total actividades NOVA-SEMVER** | 0 | 4 pre-req (00a-00d) | **28/32 completadas efectivas (87.5%)** (4 pre-req + 4 Sprint 0 + 4 Sprint 1 + 4 Sprint 2 + 3 Sprint 3 + 1 Sprint 4 + 6 Sprint 5 + 1 NOVA-SEMVER-31 + 3 cancelados NOVA-SEMVER-14/17/29 no cuentan como pendientes) | 28 (01-28) | **35** (4 pre-req + 28 sprints + 2 backlog + 1 NOVA-SEMVER-31) |
 | Alcance | — | Solo Java + multi-stack | ✅ Solo Java + multi-stack (NestJS fuera) | Idem | Idem (NestJS en roadmap separado) |
 
 ---
@@ -3299,12 +3299,12 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | **1** | Reusable workflows faltantes en `nova-devops` | 05-08 | ✅ **COMPLETADO** (4/4) | — |
 | **2** | Multi-registry publishing + GPG (preparado) | 09-12 | ✅ **COMPLETADO** (4/4) | — |
 | **3** | Activacion release-please + primer release | 13-16 | ✅ **COMPLETADO** (3/4 cerradas + 1 cancelada). NOVA-SEMVER-13 ✅, 15 ✅, 16 ✅. **NOVA-SEMVER-14 ❌ CANCELLED** (decision del usuario 2026-07-12: Maven Central descartado, GitHub Packages es permanente, §11.9.29) | — |
-| **4** | Publicacion publica + visibilidad configurable | 17-22 | 🟡 **En curso (0/6 cerradas + 1 cancelada)** — **NOVA-SEMVER-17 ❌ CANCELLED** (consecuencia de 14, §11.9.29). **NOVA-SEMVER-18-22 disponibles** sin dependencias | NOVA-SEMVER-18 (ADR-011 politica de versionado) — sin dependencias |
+| **4** | Publicacion publica + visibilidad configurable | 17-22 | 🟡 **En curso (1/6 cerradas + 1 cancelada)** — **NOVA-SEMVER-17 ❌ CANCELLED** (consecuencia de 14, §11.9.29). **NOVA-SEMVER-18 ✅** (ADR-018 politica de versionado, ya existia desde 2026-07-09). **NOVA-SEMVER-19-22 disponibles** sin dependencias | NOVA-SEMVER-19+20+21 (activar workflows reusables existentes: build matrix, OWASP, SBOM) |
 | **Backlog** | Variable visibilidad (GPG firma descartada) | 30 | ⏳ Pendiente (0/1) — NOVA-SEMVER-29 ❌ CANCELLED (§11.9.29) | NOVA-SEMVER-30 (configurar visibilidad default `public`) — opcional, default ya cubre el caso |
 | **5** | Build Cache en GitHub Actions + composite actions | 23-28 | ✅ **COMPLETADO (6/6)** — NOVA-SEMVER-23 ✅, 24 ✅, 25 ✅, 26 ✅, 27 ✅, 28 ✅. **Medicion de impacto (§11.9.28):** ~50% de mejora total en builds de CI, Remote Cache dominante (~48%), Local Build Cache ~57% entre runs consecutivos, Configuration Cache overhead alto en primer store. | — |
 | **Post-Sprint 0** | Convencion de naming | 31 | ✅ **COMPLETADO** (1/1, 2026-07-09) | — |
 
-**Progreso total: 27/32 actividades efectivas (84.4%)** — 27 implementadas + 3 canceladas por decision documentada (NOVA-SEMVER-14, 17, 29, consecuencia de descartar Maven Central, §11.9.29) sobre un total original de 35. NOVA-SEMVER-30 sigue pendiente como unica actividad abierta en backlog.
+**Progreso total: 28/32 actividades efectivas (87.5%)** — 28 implementadas + 3 canceladas por decision documentada (NOVA-SEMVER-14, 17, 29, consecuencia de descartar Maven Central, §11.9.29) sobre un total original de 35. Abiertas: NOVA-SEMVER-19-22 (Sprint 4) y NOVA-SEMVER-30 (backlog opcional).
 
 ### 15.6. Resumen ejecutivo (1 minuto de lectura, actualizado 2026-07-09)
 
@@ -3434,13 +3434,13 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 
 ### Siguiente paso
 
-**Estado actual (2026-07-12, decision formalizada):** GitHub Packages es el registry unico y permanente de Nova Platform (§11.9.29, decision del usuario). El ciclo end-to-end esta cerrado para los **9 repos Gradle + los 4 BOMs**. **Sprint 5 esta 100% cerrado** (NOVA-SEMVER-23-28 todos ✅). **Sprint 3 esta cerrado** (13/15/16 ✅ + 14 ❌ CANCELLED por decision). **Sprint 4 esta desbloqueado** (17 ❌ CANCELLED + 18-22 disponibles). **Progreso: 27/32 actividades efectivas (84.4%)**.
+**Estado actual (2026-07-12, decision formalizada):** GitHub Packages es el registry unico y permanente de Nova Platform (§11.9.29, decision del usuario). El ciclo end-to-end esta cerrado para los **9 repos Gradle + los 4 BOMs**. **Sprint 5 esta 100% cerrado** (NOVA-SEMVER-23-28 todos ✅). **Sprint 3 esta cerrado** (13/15/16 ✅ + 14 ❌ CANCELLED por decision). **Sprint 4 esta en curso** (17 ❌ CANCELLED, 18 ✅ hecho previamente, 19-22 disponibles). **Progreso: 28/32 actividades efectivas (87.5%)**.
 
-**Prioridad siguiente — Sprint 4 (sin bloqueadores, todas las dependencias resueltas):**
-1. **NOVA-SEMVER-18:** Documentar politica de bump en `docs/adr/ADR-011-versioning.md`. Sin dependencias, bajo esfuerzo.
-2. **NOVA-SEMVER-19:** Crear `reusable-build-matrix.yml` invocable (Java 21 + 25). El workflow ya existe en `nova-devops`, falta invocarlo desde los repos consumidores.
-3. **NOVA-SEMVER-20:** Activar `reusable-owasp-check.yml` (ya existe) en los repos consumidores.
-4. **NOVA-SEMVER-21:** Activar `reusable-sbom.yml` (ya existe) en los repos consumidores.
+**Prioridad siguiente — Sprint 4 (NOVA-SEMVER-19-21 en curso, 22 despues):**
+1. ~~**NOVA-SEMVER-18**~~ ✅ Ya hecho (`docs/adrs/versioning/ADR-018-politica-de-versioning-y-bump.md`, 2026-07-09).
+2. **NOVA-SEMVER-19:** Invocar `reusable-build-matrix.yml` (ya existe en `nova-devops`) desde los 9 repos Gradle + 3 repos Maven (bootstrap de CI nuevo para `nova-bom`, `nova-java-spring-boot-parent`, `nova-java-spring-boot-archetype`, que no tenian ningun workflow).
+3. **NOVA-SEMVER-20:** Activar `reusable-owasp-check.yml` (ya existe) en los mismos repos. Requiere plugin `org.owasp.dependencycheck` en cada `build.gradle.kts` Gradle (Maven lo invoca ad-hoc via GAV, sin cambios al pom.xml).
+4. **NOVA-SEMVER-21:** Activar `reusable-sbom.yml` (ya existe) en los mismos repos. Requiere plugin `org.cyclonedx.bom` en Gradle.
 5. **NOVA-SEMVER-22:** Definir formato de matriz de compatibilidades (que version de cada lib es compatible con cual BOM).
 
 **Canceladas por decision documentada (§11.9.29, NO son pendientes):**

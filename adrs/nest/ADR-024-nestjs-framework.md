@@ -1,4 +1,4 @@
-# ADR-018: NestJS 10.x como Framework Backend
+# ADR-024: NestJS 10.x como Framework Backend
 
 ## Estado
 **Pendiente** — NestJS stack no en alcance. ADR placeholder.
