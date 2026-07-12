@@ -3476,12 +3476,14 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 **Prioridad siguiente:**
 1. **NOVA-SEMVER-22:** Definir formato de matriz de compatibilidades (que version de cada lib es compatible con cual BOM). Ultima actividad de Sprint 4.
 
-**Deuda tecnica preexistente encontrada al activar 19/20/21, documentada en §11.9.30 (NO bloquea el cierre de Sprint 4, decision del usuario 2026-07-12: documentar sin corregir por ahora):**
-- **A:** `nova-java-mask-utils` — `checkstyleTest` falla con 43 violaciones reales en codigo de test (bug en como `reusable-build-gradle.yml` invoca la tarea, ignora la exclusion `sourceSets=[main]`).
-- **B:** `observability-spring-boot-starter`, `spring-boot-starter`, `commons-spring-boot-starter` — `401 Unauthorized` leyendo paquetes cross-repo; falta el secret `NOVA_PACKAGES_READ_TOKEN` (requiere que el usuario genere un PAT).
-- **C:** `nova-java-spring-boot-parent` — referencia `nova-spring-boot-bom:0.1.0-SNAPSHOT` (inexistente); el BOM real esta en `1.0.0`.
-- Estos 3 hallazgos dejan **5 PRs abiertos sin mergear** (`nova-java-mask-utils#2`, `observability-spring-boot-starter#2`, `spring-boot-starter#2`, `commons-spring-boot-starter#2`, `spring-boot-parent#1`) — los jobs nuevos (`matrix`/`owasp`/`sbom`) funcionan correctamente en todos, solo el job `build` preexistente falla por estas causas ajenas a Sprint 4.
-- **NVD API Key:** pendiente de parte del usuario (registro en tramite). Mientras tanto `owasp` corre en modo no-bloqueante (`continue-on-error` a nivel de step).
+**Deuda tecnica encontrada al activar 19/20/21, documentada en detalle en §11.9.30:**
+- **A:** ✅ **FIJADO** — `nova-java-mask-utils`: `checkstyleTest` lintaba código de test indebidamente; corregido en `reusable-build-gradle.yml`, PR mergeado (8/12).
+- **B:** ⏸️ **Bloqueado, pendiente del usuario** — `observability-spring-boot-starter`, `spring-boot-starter`, `commons-spring-boot-starter`: `401 Unauthorized` leyendo paquetes cross-repo; falta el secret `NOVA_PACKAGES_READ_TOKEN` (usuario esta generando el PAT, decidio configurarlo el mismo via `gh secret set`).
+- **C:** ✅ **FIJADO** — `nova-java-spring-boot-parent`: version del BOM actualizada a `1.0.0` + agregado `<repositories>` (nunca existio) + nueva capacidad de Maven cross-repo reads en `nova-setup-java`.
+- **D:** 🔴 **NUEVO, sin diagnosticar** — tras fijar C, `spring-boot-parent` sigue fallando: el POM publicado de `nova-spring-boot-starter:1.0.0` parece referenciar `nova-spring-boot-bom:1.0.1` (inexistente). Requiere el mismo PAT del bug B para inspeccionar el artefacto publicado y confirmar la causa.
+- **Bug adicional encontrado y fijado:** `NVD_API_KEY` nunca iba a funcionar — `reusable-owasp-check.yml` declaraba el secret en minusculas-con-guion (`nvd-api-key`), que `secrets: inherit` nunca matchea contra un secret real (verificado empiricamente). Renombrado a `NVD_API_KEY`.
+- Quedan **4 PRs abiertos sin mergear** (`observability-spring-boot-starter#2`, `spring-boot-starter#2`, `commons-spring-boot-starter#2`, `spring-boot-parent#1`), todos bloqueados unicamente por el PAT `NOVA_PACKAGES_READ_TOKEN` pendiente.
+- **NVD API Key:** pendiente de parte del usuario (registro en tramite). Mientras tanto `owasp` corre en modo no-bloqueante (`continue-on-error` a nivel de step) — y ahora si funcionara correctamente en cuanto se configure, tras el fix del bug de naming.
 
 **Canceladas por decision documentada (§11.9.29, NO son pendientes):**
 - **NOVA-SEMVER-14:** namespace Sonatype no viable con `pe.edu.nova` (dominio ficticio) → CANCELLED.
