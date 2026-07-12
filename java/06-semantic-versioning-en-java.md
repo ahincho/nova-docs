@@ -3008,6 +3008,20 @@ pe.edu.nova.java.libs:nova-mapper-utils:1.0.0 (by constraint)
 
 **Estado:** ✅ **Cerrado y documentado** (2026-07-10). La medición no es tan concluyente como se esperaba por el tamaño del proyecto y la interferencia entre runs paralelos, pero confirma cualitativamente que **el cache stack completo (Local + Configuration + Remote) ofrece ~50% de mejora en builds de CI**, con el Remote Cache siendo el factor dominante y el Local Build Cache el más impactante en runs consecutivos.
 
+#### 11.9.29. Hallazgo critico: NOVA-SEMVER-14 (namespace Sonatype) NO es viable con el groupId actual (2026-07-12)
+
+| Campo | Valor |
+|---|---|
+| **Contexto** | Antes de ejecutar NOVA-SEMVER-14 ("crear namespace `pe.edu.nova` en Sonatype OSSRH, ticket en `issues.sonatype.org`"), se investigo el proceso actual de Sonatype/Maven Central via `central.sonatype.org` (documentacion oficial). El resultado invalida varias partes de este documento. |
+| **Hallazgo 1 — infraestructura descontinuada** | `issues.sonatype.org` fue **descontinuado el 9 de enero de 2024** (reemplazado por autoservicio en `central.sonatype.com` + soporte via email `central-support@sonatype.com`). `s01.oss.sonatype.org` (OSSRH, staging area) llego a **end-of-life el 30 de junio de 2025** — a la fecha de este hallazgo (2026-07-12), lleva **mas de un año descontinuado**. Ambas URLs estan referenciadas en este documento (§3.2, §3.3, §8.8, §10.3.6, §11.4, §15.4) y en 2 workflows reales (`reusable-publish-{gradle,maven}-maven-central.yml` en `nova-devops`) que usan la URL de staging de OSSRH — **estos workflows apuntan a un endpoint muerto y fallarian si se ejecutaran hoy**. |
+| **Hallazgo 2 — proceso de reemplazo (Central Portal)** | El nuevo sistema (`central.sonatype.com`, llamado "Central Portal") permite registro con login social de GitHub. La verificacion de namespace es automatica y rapida (minutos a horas), **no requiere ticket manual ni aprobacion humana para casos normales** — contrario a la percepcion de "muchas aprobaciones". El proceso real es: (1) crear cuenta, (2) verificar namespace, (3) publicar. |
+| **Hallazgo 3 — CRITICO: verificacion de namespace requiere dominio real** | Sonatype verifica la propiedad del namespace de 2 formas: **(a) registro DNS TXT** en el dominio reverso exacto (para `pe.edu.nova` deberia agregarse el TXT en `nova.edu.pe`) — requiere control real del DNS de ese dominio; **(b) verificacion automatica** si el namespace tiene la forma `io.github.<usuario>` (u otro hosting: GitLab/Gitee/Bitbucket), verificada instantaneamente via el login social usado para registrarse. **Confirmado con el usuario (2026-07-12): `pe.edu.nova` es un nombre ficticio del proyecto (era antes "Galaxy Training"), sin dominio real `nova.edu.pe` controlado.** Por lo tanto, **NOVA-SEMVER-14 tal como esta planteado (verificar `pe.edu.nova` por DNS) NO es viable.** |
+| **Hallazgo 4 — gap adicional: sin plugin oficial de Gradle** | El nuevo Central Portal **no tiene un plugin propio de Gradle** (si de Maven). Publicar desde Gradle requiere un plugin de terceros no soportado oficialmente por Sonatype (ej. `vanniktech/gradle-maven-publish-plugin`, `GradleUp/nmcp`, entre ~15 alternativas listadas en la doc oficial). Esto afecta a **9 de los 15 repos Java** (los que son Gradle), y significa que los workflows `reusable-publish-gradle-maven-central.yml` necesitarian ser reescritos usando un plugin de terceros, no solo apuntar a una URL nueva. |
+| **Hallazgo 5 — limites de publicacion nuevos (no aplican a Nova)** | Sonatype esta introduciendo limites de uso por volumen (soft-limits desde 16-jun-2026, rate limiting desde 11-ago-2026), pero estan pensados para el top 10% de publicadores por volumen (>1,167 archivos/mes en el percentil 90). El volumen esperado de Nova (~14 paquetes totales, publicados esporadicamente) esta muy por debajo — **no es un bloqueante real para este proyecto.** |
+| **Opciones evaluadas** | **(A) Migrar el groupId a `io.github.ahincho.*`** en los 15 repos (verificacion automatica, sin DNS) — esfuerzo grande (cambiar `groupId` en `build.gradle.kts`/`pom.xml`, en el BOM `dependencyManagement`, en toda la documentacion, en los 4 BOMs ya publicados en `1.0.0` que tendrian que re-publicarse con el nuevo groupId). **(B) Descartar Maven Central indefinidamente** y quedarse solo con GitHub Packages (que ya funciona 100% end-to-end, §11.9.14-26) — cero esfuerzo adicional, pierde el beneficio de discovery publico sin autenticacion. **(C) Diferir la decision**, dejar NOVA-SEMVER-14/17/29 explicitamente bloqueados en el roadmap con esta nota, y priorizar el resto de Sprint 4 (NOVA-SEMVER-18-22) que NO dependen de esta decision. |
+| **Decision tomada (2026-07-12)** | **Opcion C (diferir).** NOVA-SEMVER-14 pasa de "⏳ pendiente, ticket simple" a "🔴 bloqueado, requiere decision de negocio" en el roadmap. NOVA-SEMVER-17 (publish a Maven Central) y NOVA-SEMVER-29 (generar GPG) quedan transitivamente bloqueados por la misma razon. El resto de Sprint 4 (18, 19, 20, 21, 22) **no depende de esta decision** y puede avanzar de inmediato. |
+| **Estado** | 🔴 **Bloqueado — requiere decision de negocio del usuario** (migrar groupId vs descartar Maven Central). Documentado para no re-investigar en el futuro. Referencias desactualizadas en §3.2/§3.3/§8.8/§10.3.6/§11.4/§15.4 quedan como estan (documentan el proceso historico que se penso que era correcto) pero deben leerse con esta nota como contexto. |
+
 ---
 
 ## 12. Roadmap de adopcion (propuesto)
@@ -3059,13 +3073,13 @@ pe.edu.nova.java.libs:nova-mapper-utils:1.0.0 (by constraint)
 > **Actualizacion 2026-07-10 (2da vuelta):** una vez el usuario configuro el PAT real, se ejecuto una demo end-to-end en `nova-java-api-standard` que confirmo el flujo 100% automatico (merge → tag creado con PAT → `publish-on-tag.yml` disparado sin intervencion manual → `nova-api-standard:1.0.0` publicado en GitHub Packages), ver §11.9.14.
 
 13. **NOVA-SEMVER-13:** ✅ Configurar `.release-please-config.json` + `.release-please-manifest.json` en cada repo Java (10/10). Workflow reusable `reusable-release-please.yml` ya existia desde Sprint 1; nuevo `reusable-release-publish.yml` activado por tag push.
-14. **NOVA-SEMVER-14:** ⏳ Crear namespace `pe.edu.nova` en Sonatype OSSRH.
+14. **NOVA-SEMVER-14:** 🔴 **BLOQUEADO** (2026-07-12, §11.9.29). Crear namespace en Sonatype Central Portal (proceso real ya no usa `issues.sonatype.org`, descontinuado desde 2024 — ver §11.9.29). El namespace `pe.edu.nova` **no es verificable** porque requiere control DNS real de `nova.edu.pe`, dominio ficticio del proyecto. Requiere decision de negocio: (A) migrar groupId a `io.github.ahincho.*` (esfuerzo grande, 15 repos) o (B) descartar Maven Central indefinidamente. Sin decision tomada aun.
 15. **NOVA-SEMVER-15:** ✅ Primer release de prueba: `1.0.0` (no `0.1.0`, ver §11.8.3) ejecutado con exito de punta a punta y **replicado en 9 de 9 repos Gradle + los 4 BOMs** (push commits Conventional → release-please crea PR → merge → tag v1.0.0 → publish, 100% automatico con PAT real). Verificado con GitHub Release + paquetes reales publicados en GitHub Packages en todos los casos exitosos. La cadena final (`mapper-utils` + `spring-boot-starter` + los 4 BOMs en `1.0.0` con contenido correcto) se completo tras refrescar el secret `NOVA_RELEASE_PAT` (§11.9.22), el workaround del 409 Conflict (§11.9.25), y el fix del bug critico de Gradle BOM (§11.9.26).
 16. **NOVA-SEMVER-16:** ✅ Publicar `1.0.0` a GitHub Packages: **hecho** para 9 de 9 repos Gradle + los 4 BOMs (todos en `1.0.0`). Verificar consumo desde el BOM: **confirmado end-to-end** — `nova-java-spring-boot-starter` resuelve correctamente `nova-spring-boot-bom:1.0.0`, `nova-date-utils:1.0.0`, `nova-mapper-utils:1.0.0`, `nova-mask-starter:1.0.0` y `nova-api-standard-starter:1.0.0` a traves del BOM con versiones literales (§11.9.17, §11.9.23, §11.9.26).
 
 ### Sprint 4 — Publicacion a Maven Central y optimizaciones
 
-17. **NOVA-SEMVER-17:** Preparar publicacion a Maven Central via Sonatype (workflow listo, **ejecucion bloqueada** hasta completar NOVA-SEMVER-29: generacion de claves GPG).
+17. **NOVA-SEMVER-17:** 🔴 **BLOQUEADO** (§11.9.29). Publicar a Maven Central via Sonatype Central Portal. Bloqueado transitivamente por NOVA-SEMVER-14 (namespace no viable con groupId actual) y NOVA-SEMVER-29 (GPG). Ademas, los workflows existentes (`reusable-publish-{gradle,maven}-maven-central.yml`) apuntan a OSSRH (`s01.oss.sonatype.org`), descontinuado desde 2025-06-30 — necesitarian reescribirse para el Central Portal, y para Gradle especificamente requeriria adoptar un plugin de terceros (sin soporte oficial de Sonatype para Gradle).
 18. **NOVA-SEMVER-18:** Documentar politica de bump en `docs/adr/ADR-011-versioning.md`.
 19. **NOVA-SEMVER-19:** Crear `reusable-build-matrix.yml` (Java 21 + 25).
 20. **NOVA-SEMVER-20:** Crear `reusable-owasp-check.yml` (CVEs).
@@ -3273,8 +3287,8 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | **0** | Fundamentos versioning (versioning plugin, commitlint, lefthook) | 01-04 | ✅ **COMPLETADO** (4/4) | — |
 | **1** | Reusable workflows faltantes en `nova-devops` | 05-08 | ✅ **COMPLETADO** (4/4) | — |
 | **2** | Multi-registry publishing + GPG (preparado) | 09-12 | ✅ **COMPLETADO** (4/4) | — |
-| **3** | Activacion release-please + primer release | 13-16 | 🟡 En curso (3/4) — NOVA-SEMVER-13 ✅, NOVA-SEMVER-15 ✅ (9/9 repos), NOVA-SEMVER-16 ✅ (consumo del BOM confirmado end-to-end). Solo NOVA-SEMVER-14 pendiente | **NOVA-SEMVER-14:** namespace Sonatype (opcional, no bloquea GitHub Packages) |
-| **4** | Publicacion publica + visibilidad configurable | 17-22 | ⏳ Pendiente (0/6) | NOVA-SEMVER-17 (Maven Central, bloqueado por 29) |
+| **3** | Activacion release-please + primer release | 13-16 | 🟡 En curso (3/4) — NOVA-SEMVER-13 ✅, NOVA-SEMVER-15 ✅ (9/9 repos), NOVA-SEMVER-16 ✅ (consumo del BOM confirmado end-to-end). **NOVA-SEMVER-14 🔴 BLOQUEADO** (§11.9.29: namespace `pe.edu.nova` no verificable, requiere decision de negocio) | Decidir: migrar groupId a `io.github.ahincho.*` o descartar Maven Central indefinidamente |
+| **4** | Publicacion publica + visibilidad configurable | 17-22 | ⏳ Pendiente (0/6) — **NOVA-SEMVER-17 🔴 BLOQUEADO** (transitivamente por 14+29, §11.9.29). **NOVA-SEMVER-18-22 NO bloqueados**, pueden avanzar de inmediato | NOVA-SEMVER-18 (ADR-011 politica de versionado) — sin dependencias |
 | **5** | Build Cache en GitHub Actions + composite actions | 23-28 | ✅ **COMPLETADO (6/6)** — NOVA-SEMVER-23 ✅, 24 ✅, 25 ✅, 26 ✅, 27 ✅, 28 ✅. **Medicion de impacto (§11.9.28):** ~50% de mejora total en builds de CI, Remote Cache dominante (~48%), Local Build Cache ~57% entre runs consecutivos, Configuration Cache overhead alto en primer store. | — |
 | **Backlog** | GPG firma + variable visibilidad | 29-30 | ⏳ Diferido (0/2) | NOVA-SEMVER-30 (configurar visibilidad default `public`) |
 | **Post-Sprint 0** | Convencion de naming | 31 | ✅ **COMPLETADO** (1/1, 2026-07-09) | — |
@@ -3409,10 +3423,19 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 
 ### Siguiente paso
 
-**Estado actual (2026-07-10, actualizado tras cerrar Sprint 5):** El ciclo end-to-end esta cerrado para los **9 repos Gradle + los 4 BOMs** (con contenido correcto, versiones literales, §11.9.26). **Sprint 5 esta 100% cerrado** (NOVA-SEMVER-23-28 todos ✅). El siguiente paso natural es **cerrar Sprint 3** (NOVA-SEMVER-14, opcional) o **iniciar Sprint 4** (publicacion a Maven Central).
+**Estado actual (2026-07-12, actualizado tras cerrar Sprint 5 + investigar Sonatype):** El ciclo end-to-end esta cerrado para los **9 repos Gradle + los 4 BOMs**. **Sprint 5 esta 100% cerrado** (NOVA-SEMVER-23-28 todos ✅). **Sprint 3 tiene su ultima actividad BLOQUEADA por una decision de negocio**, no por falta de tiempo: NOVA-SEMVER-14 requiere que el usuario decida entre migrar el groupId de todo el proyecto o descartar Maven Central (§11.9.29). **Progreso: 27/35 (77.1%).**
 
-**Prioridad siguiente — Sprint 3 (cierre):**
-1. **NOVA-SEMVER-14:** Crear namespace `pe.edu.nova` en Sonatype OSSRH (ticket en `issues.sonatype.org`). Bloquea Maven Central end-to-end. **Opcional**, no bloquea GitHub Packages. Cierra Sprint 3 al 4/4.
+**Prioridad siguiente — Sprint 4 (NO bloqueado por Sonatype):**
+1. **NOVA-SEMVER-18:** Documentar politica de bump en `docs/adr/ADR-011-versioning.md`. Sin dependencias, bajo esfuerzo.
+2. **NOVA-SEMVER-19:** Crear `reusable-build-matrix.yml` invocable (Java 21 + 25). El workflow ya existe en `nova-devops`, falta invocarlo desde los repos consumidores.
+3. **NOVA-SEMVER-20:** Activar `reusable-owasp-check.yml` (ya existe) en los repos consumidores.
+4. **NOVA-SEMVER-21:** Activar `reusable-sbom.yml` (ya existe) en los repos consumidores.
+5. **NOVA-SEMVER-22:** Definir formato de matriz de compatibilidades (que version de cada lib es compatible con cual BOM).
+
+**Bloqueado — requiere decision del usuario (§11.9.29):**
+- **NOVA-SEMVER-14:** namespace Sonatype no viable con `pe.edu.nova` (dominio ficticio). Opciones: (A) migrar groupId a `io.github.ahincho.*` en los 15 repos, o (B) descartar Maven Central indefinidamente y quedarse solo con GitHub Packages.
+- **NOVA-SEMVER-17:** publicar a Maven Central — bloqueado transitivamente por 14 (namespace) y 29 (GPG). Ademas los workflows existentes usan URLs de OSSRH descontinuadas, requeririan reescritura para el nuevo Central Portal.
+- **NOVA-SEMVER-29:** generar claves GPG — solo tiene sentido si se resuelve 14 primero.
 
 **Sprint 5 cerrado (NOVA-SEMVER-23-28, 6/6 ✅):**
 - NOVA-SEMVER-23 ✅ (Local Build Cache, `org.gradle.caching=true` en 10 repos)
