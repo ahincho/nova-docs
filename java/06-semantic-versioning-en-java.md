@@ -3033,9 +3033,39 @@ pe.edu.nova.java.libs:nova-mapper-utils:1.0.0 (by constraint)
 
 ---
 
+#### 11.9.30. NOVA-SEMVER-19/20/21: activacion de build matrix, OWASP y SBOM (2026-07-12)
+
+**Alcance:** activar los 3 workflows reusables ya existentes en `nova-devops` (`reusable-build-matrix.yml`, `reusable-owasp-check.yml`, `reusable-sbom.yml`) desde los `ci.yml` de los **12 repos Java con CI** (9 Gradle + 3 Maven: `nova-bom`, `nova-java-spring-boot-parent`, `nova-java-spring-boot-archetype` — estos 2 ultimos no tenian ningun workflow, se bootstrapeo su CI desde cero).
+
+**Cambios en cada repo Gradle:** se agregaron los plugins `org.owasp.dependencycheck` (12.2.2) y `org.cyclonedx.bom` (3.2.4) al `build.gradle.kts` (Maven no lo necesita: ambas herramientas se invocan ad-hoc via coordenadas GAV completas — `org.owasp:dependency-check-maven:check`, `org.cyclonedx:cyclonedx-maven-plugin:makeBom` — sin declarar el plugin en el `pom.xml`).
+
+**3 bugs reales encontrados y corregidos en `nova-devops` (preexistentes, no introducidos en esta sesion pero expuestos al activar los workflows):**
+
+| # | Bug | Causa | Fix |
+|---|---|---|---|
+| 1 | `reusable-owasp-check.yml` y `reusable-sbom.yml` pasaban `-Pdependency-check.X=` / `-Pcyclonedx.outputFormat=` al invocar Gradle | **Ninguno de los 2 plugins lee propiedades `-P` de linea de comandos** — verificado contra el codigo fuente real (`DependencyCheckPlugin.groovy`, `DependencyCheckExtension.groovy`: cero llamadas a `project.findProperty()`/`hasProperty()`). Las flags eran aceptadas sin error pero no tenian ningun efecto — el analisis siempre corria con los defaults del plugin. | Reemplazado por un bloque `dependencyCheck { }` tipado en cada `build.gradle.kts`, que lee `NOVA_OWASP_FAIL_ON_CVSS` / `NVD_API_KEY` via `System.getenv()` (mismo patron ya usado para GPG en el bloque `signing {}`). Tambien se corrigio la ruta del reporte HTML subido como artifact (faltaba el subdirectorio `dependency-check/` que el plugin usa por defecto). |
+| 2 | Job `owasp` marcado `continue-on-error: true` a nivel de job (mientras no hay `NVD_API_KEY`) rompia el parseo del workflow en los 12 repos (`0 jobs`, "workflow file issue") | `continue-on-error` **no esta en la lista de keywords soportados** para un job que usa `uses:` (llamado a workflow reusable) — confirmado en la doc oficial ("Supported keywords for jobs that call a reusable workflow"): solo `name`/`uses`/`with`/`secrets`/`strategy`/`needs`/`if`/`concurrency`/`permissions`. | Movido a nivel de **step** dentro de `reusable-owasp-check.yml` (valido en cualquier lugar donde hay `steps:`), con el mismo efecto pretendido (no bloquear mientras no hay key) sin romper el schema. |
+| 3 | `nova-java-spring-boot-parent` y `nova-java-spring-boot-archetype` fallaban con "workflow file issue" / `startup_failure` incluso con YAML valido | El job `sbom` de `reusable-sbom.yml` declara `permissions: contents: write` (necesario para adjuntar el SBOM a un GitHub Release). Los 2 repos nuevos tenian `default_workflow_permissions: read` (el default de cuentas GitHub mas recientes), mientras que el resto de repos ya tenian `write` configurado desde antes. GitHub rechaza el workflow completo si un job anidado pide mas permisos de los que el caller tiene disponibles ("permissions can only be maintained or reduced — not elevated"). | Corregido via API: `gh api --method PUT repos/{owner}/{repo}/actions/permissions/workflow -f default_workflow_permissions=write` en ambos repos. |
+
+**Resultado tras las correcciones — 7 de 12 repos 100% verdes** (build + matrix Java 21/25 + owasp + sbom + sonar, donde aplica), **mergeados a `main`:** `nova-java-date-utils`, `nova-bom`, `nova-java-api-standard`, `nova-java-mapper-utils`, `nova-java-observability-utils`, `nova-java-spring-boot-gradle-plugin`, `nova-java-spring-boot-archetype`.
+
+**3 bugs preexistentes adicionales encontrados (NO corregidos en esta sesion — decision del usuario 2026-07-12: "documentar pero no tocar ahora"), afectan al job `build` ya existente (no a los jobs nuevos de esta actividad) en 5 repos, PRs quedan abiertos sin mergear:**
+
+| # | Repo(s) afectado(s) | Sintoma | Causa raiz | Fix propuesto (no aplicado) |
+|---|---|---|---|---|
+| A | `nova-java-mask-utils` | `checkstyleTest` falla con 43 violaciones reales (`AvoidStarImport`, `UnusedImports`) en codigo de test | El bloque `checkstyle { sourceSets = listOf(project.sourceSets.main.get()) }` presente en los 9 repos (con el comentario "Only lint production code") **solo afecta que tareas se agregan al lifecycle `check`**, NO evita que la tarea nombrada `checkstyleTest` exista o se pueda invocar directamente. `reusable-build-gradle.yml` ejecuta `./gradlew checkstyleMain checkstyleTest` explicitamente, ignorando esa exclusion. | Cambiar `reusable-build-gradle.yml` para correr solo `checkstyleMain` (alineado con la intencion ya documentada en el codigo), o remediar las 43 violaciones de test. |
+| B | `nova-java-observability-spring-boot-starter`, `nova-java-spring-boot-starter`, `nova-java-commons-spring-boot-starter` | `401 Unauthorized` al resolver dependencias de OTRO repo (`nova-observability-utils`, `nova-spring-boot-bom`, `nova-api-standard`) via GitHub Packages | El secret `NOVA_PACKAGES_READ_TOKEN` (PAT necesario para lectura cross-repo de paquetes — `GITHUB_TOKEN` solo puede leer paquetes del mismo repo) **nunca fue configurado** (`gh secret list` solo muestra `NOVA_RELEASE_PAT`). El fallback a `GITHUB_TOKEN` en el `build.gradle.kts` de estos repos no es suficiente para lectura cross-repo. | Generar un PAT con scope `read:packages`, configurarlo como secret (`NOVA_PACKAGES_READ_TOKEN`) en cada uno de los repos consumidores. Requiere accion del usuario (generar el PAT). |
+| C | `nova-java-spring-boot-parent` | No resuelve `pe.edu.nova.java:nova-spring-boot-bom:0.1.0-SNAPSHOT` (import de `dependencyManagement`) | La property `<nova-bom.version>` en el `pom.xml` de este repo sigue en `0.1.0-SNAPSHOT`, pero el BOM real publicado (NOVA-SEMVER-15/16) esta en `1.0.0` — nunca se actualizo esta referencia cuando se hizo el release. Ademas este repo (y `nova-java-spring-boot-archetype`) siguen completos en `0.1.0-SNAPSHOT` propio, a diferencia de los 9 Gradle + 4 BOMs que ya estan en `1.0.0`. | Actualizar `<nova-bom.version>` a `1.0.0`. Evaluar si corresponde tambien bumpear la version propia del repo (fuera de alcance de esta sesion: requeriria configurar release-please para estos 2 repos, que actualmente no lo tienen). |
+
+**NVD API Key:** el usuario esta gestionando el registro en `https://nvd.nist.gov/developers/request-an-api-key`; aun no disponible al cierre de esta sesion. Mientras tanto, `owasp` corre sin key (`continue-on-error` a nivel de step, ver bug #2 arriba) — funciona pero es lento/vulnerable a rate-limit 429 en el primer run de cada repo. Cuando llegue la key: (1) configurarla como secret `NVD_API_KEY` (idealmente a nivel de repo en cada uno, dado que esta cuenta no es una Organizacion de GitHub — `gh secret list --org` devuelve 404), (2) remover los 2 bloques `continue-on-error: true` de `reusable-owasp-check.yml` para restaurar el gate real de CVSS.
+
+**Estado:** ✅ NOVA-SEMVER-19, 20, 21 **implementados y validados** (los 3 jobs nuevos funcionan correctamente en los 12 repos). Los hallazgos A/B/C son deuda tecnica preexistente, documentada pero fuera de alcance de este cierre.
+
+---
+
 ## 12. Roadmap de adopcion (propuesto)
 
-> **Estado del roadmap al 2026-07-12 (decision formalizada, §11.9.29):** 28 actividades implementadas + 3 canceladas por decision documentada (NOVA-SEMVER-14, 17, 29 — consecuencia de descartar Maven Central y mantener GitHub Packages como registry permanente). **Progreso efectivo: 28/32 (87.5%)** sobre el total ajustado. Actividades abiertas: NOVA-SEMVER-19-22 (Sprint 4, en curso) y NOVA-SEMVER-30 (backlog, opcional).
+> **Estado del roadmap al 2026-07-12 (Sprint 4 practicamente cerrado):** 31 actividades implementadas + 3 canceladas por decision documentada (NOVA-SEMVER-14, 17, 29 — consecuencia de descartar Maven Central y mantener GitHub Packages como registry permanente). **Progreso efectivo: 31/32 (96.9%)** sobre el total ajustado. Unica actividad abierta: NOVA-SEMVER-22 (Sprint 4). NOVA-SEMVER-30 sigue en backlog opcional.
 
 > **Nota sobre el alcance:** este roadmap cubre exclusivamente los **15 repos Java** y los **3 repos multi-stack** (nova-devops, nova-bom, nova-infrastructure). Los 4 repos NestJS (`nova-nestjs-*`) se abordaran en un roadmap separado en el futuro.
 
@@ -3092,9 +3122,9 @@ pe.edu.nova.java.libs:nova-mapper-utils:1.0.0 (by constraint)
 
 17. **NOVA-SEMVER-17:** ❌ **CANCELLED** (§11.9.29). Publicar a Maven Central via Sonatype Central Portal — descartado por decision del usuario (misma razon que NOVA-SEMVER-14).
 18. **NOVA-SEMVER-18:** ✅ Documentar politica de bump. Hecho en `docs/adrs/versioning/ADR-018-politica-de-versioning-y-bump.md` (2026-07-09, "Aceptada (implementada)"), ya referenciado en §11.8.3 y §11.9.17 como "politica ADR-018". Cubre version inicial (1.0.0, no 0.x.y), mapa commit-type→bump, no pre-releases, manejo de bugs post-release, breaking changes con el BOM coordinador, y formato de tags.
-19. **NOVA-SEMVER-19:** Crear `reusable-build-matrix.yml` (Java 21 + 25).
-20. **NOVA-SEMVER-20:** Crear `reusable-owasp-check.yml` (CVEs).
-21. **NOVA-SEMVER-21:** Crear `reusable-sbom.yml` (CycloneDX).
+19. **NOVA-SEMVER-19:** ✅ Activado `reusable-build-matrix.yml` (Java 21 + 25) en los 12 repos con CI. Validado con PRs reales: 7/12 100% verdes y mergeados (§11.9.30).
+20. **NOVA-SEMVER-20:** ✅ Activado `reusable-owasp-check.yml` (CVEs) en los 12 repos. Requirio agregar el plugin `org.owasp.dependencycheck` (12.2.2) + corregir 2 bugs reales del workflow reusable (§11.9.30). Corre en modo no-bloqueante hasta que llegue la NVD API Key.
+21. **NOVA-SEMVER-21:** ✅ Activado `reusable-sbom.yml` (CycloneDX) en los 12 repos. Requirio agregar el plugin `org.cyclonedx.bom` (3.2.4) + corregir bug de permisos (`contents: write`) en 2 repos nuevos (§11.9.30).
 22. **NOVA-SEMVER-22:** Crear matriz de compatibilidad (que version de mask-utils va con cual api-standard).
 
 ### Sprint 5 — Build Cache y Composite Actions
@@ -3187,7 +3217,7 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | Troubleshooting | No documentado | No documentado | ✅ Si, seccion 11 con 9 sub-tablas (11.1-11.9) | Idem | Idem |
 | Firma GPG | No requerida | No requerida | ❌ **CANCELLED** (NOVA-SEMVER-29, §11.9.29): GitHub Packages no requiere firma; se descarto indefinidamente junto con Maven Central. Composite action `nova-setup-gpg` y signing plugin en 9 repos quedan sin uso activo (preparados pero no se generara la clave). | N/A (cancelado) | Idem |
 | Calidad de codigo (Checkstyle) | No configurado | Idem | ✅ **9/9 repos Gradle** con plugin `checkstyle` aplicado + ruleset comun + exclusion de sourceSet `test` (§11.9.6, corregido 2026-07-10; antes solo 4/9 y sin ruleset funcional) | Idem | Idem |
-| **Total actividades NOVA-SEMVER** | 0 | 4 pre-req (00a-00d) | **28/32 completadas efectivas (87.5%)** (4 pre-req + 4 Sprint 0 + 4 Sprint 1 + 4 Sprint 2 + 3 Sprint 3 + 1 Sprint 4 + 6 Sprint 5 + 1 NOVA-SEMVER-31 + 3 cancelados NOVA-SEMVER-14/17/29 no cuentan como pendientes) | 28 (01-28) | **35** (4 pre-req + 28 sprints + 2 backlog + 1 NOVA-SEMVER-31) |
+| **Total actividades NOVA-SEMVER** | 0 | 4 pre-req (00a-00d) | **31/32 completadas efectivas (96.9%)** (4 pre-req + 4 Sprint 0 + 4 Sprint 1 + 4 Sprint 2 + 3 Sprint 3 + 4 Sprint 4 + 6 Sprint 5 + 1 NOVA-SEMVER-31 + 3 cancelados NOVA-SEMVER-14/17/29 no cuentan como pendientes) | 28 (01-28) | **35** (4 pre-req + 28 sprints + 2 backlog + 1 NOVA-SEMVER-31) |
 | Alcance | — | Solo Java + multi-stack | ✅ Solo Java + multi-stack (NestJS fuera) | Idem | Idem (NestJS en roadmap separado) |
 
 ---
@@ -3299,12 +3329,12 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | **1** | Reusable workflows faltantes en `nova-devops` | 05-08 | ✅ **COMPLETADO** (4/4) | — |
 | **2** | Multi-registry publishing + GPG (preparado) | 09-12 | ✅ **COMPLETADO** (4/4) | — |
 | **3** | Activacion release-please + primer release | 13-16 | ✅ **COMPLETADO** (3/4 cerradas + 1 cancelada). NOVA-SEMVER-13 ✅, 15 ✅, 16 ✅. **NOVA-SEMVER-14 ❌ CANCELLED** (decision del usuario 2026-07-12: Maven Central descartado, GitHub Packages es permanente, §11.9.29) | — |
-| **4** | Publicacion publica + visibilidad configurable | 17-22 | 🟡 **En curso (1/6 cerradas + 1 cancelada)** — **NOVA-SEMVER-17 ❌ CANCELLED** (consecuencia de 14, §11.9.29). **NOVA-SEMVER-18 ✅** (ADR-018 politica de versionado, ya existia desde 2026-07-09). **NOVA-SEMVER-19-22 disponibles** sin dependencias | NOVA-SEMVER-19+20+21 (activar workflows reusables existentes: build matrix, OWASP, SBOM) |
+| **4** | Publicacion publica + visibilidad configurable | 17-22 | 🟡 **Casi cerrado (4/6 cerradas + 1 cancelada)** — **NOVA-SEMVER-17 ❌ CANCELLED** (consecuencia de 14, §11.9.29). **NOVA-SEMVER-18 ✅** (ADR-018), **19 ✅** (build matrix), **20 ✅** (OWASP), **21 ✅** (SBOM) — todos validados con PRs reales en los 12 repos con CI (§11.9.30, 7/12 mergeados; 5/12 con deuda tecnica preexistente documentada, no bloqueante) | NOVA-SEMVER-22 (matriz de compatibilidad) — unica actividad restante |
 | **Backlog** | Variable visibilidad (GPG firma descartada) | 30 | ⏳ Pendiente (0/1) — NOVA-SEMVER-29 ❌ CANCELLED (§11.9.29) | NOVA-SEMVER-30 (configurar visibilidad default `public`) — opcional, default ya cubre el caso |
 | **5** | Build Cache en GitHub Actions + composite actions | 23-28 | ✅ **COMPLETADO (6/6)** — NOVA-SEMVER-23 ✅, 24 ✅, 25 ✅, 26 ✅, 27 ✅, 28 ✅. **Medicion de impacto (§11.9.28):** ~50% de mejora total en builds de CI, Remote Cache dominante (~48%), Local Build Cache ~57% entre runs consecutivos, Configuration Cache overhead alto en primer store. | — |
 | **Post-Sprint 0** | Convencion de naming | 31 | ✅ **COMPLETADO** (1/1, 2026-07-09) | — |
 
-**Progreso total: 28/32 actividades efectivas (87.5%)** — 28 implementadas + 3 canceladas por decision documentada (NOVA-SEMVER-14, 17, 29, consecuencia de descartar Maven Central, §11.9.29) sobre un total original de 35. Abiertas: NOVA-SEMVER-19-22 (Sprint 4) y NOVA-SEMVER-30 (backlog opcional).
+**Progreso total: 31/32 actividades efectivas (96.9%)** — 31 implementadas + 3 canceladas por decision documentada (NOVA-SEMVER-14, 17, 29, consecuencia de descartar Maven Central, §11.9.29) sobre un total original de 35. Abierta: NOVA-SEMVER-22 (Sprint 4, ultima actividad). NOVA-SEMVER-30 sigue en backlog opcional.
 
 ### 15.6. Resumen ejecutivo (1 minuto de lectura, actualizado 2026-07-09)
 
@@ -3434,14 +3464,17 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 
 ### Siguiente paso
 
-**Estado actual (2026-07-12, decision formalizada):** GitHub Packages es el registry unico y permanente de Nova Platform (§11.9.29, decision del usuario). El ciclo end-to-end esta cerrado para los **9 repos Gradle + los 4 BOMs**. **Sprint 5 esta 100% cerrado** (NOVA-SEMVER-23-28 todos ✅). **Sprint 3 esta cerrado** (13/15/16 ✅ + 14 ❌ CANCELLED por decision). **Sprint 4 esta en curso** (17 ❌ CANCELLED, 18 ✅ hecho previamente, 19-22 disponibles). **Progreso: 28/32 actividades efectivas (87.5%)**.
+**Estado actual (2026-07-12, Sprint 4 practicamente cerrado):** GitHub Packages es el registry unico y permanente de Nova Platform (§11.9.29). **Sprint 5 esta 100% cerrado** (NOVA-SEMVER-23-28). **Sprint 3 esta cerrado** (13/15/16 ✅ + 14 ❌ CANCELLED). **Sprint 4 esta cerrado en 5/6** (17 ❌ CANCELLED, 18 ✅, 19 ✅, 20 ✅, 21 ✅ — todos implementados y validados con PRs reales en los 12 repos con CI, §11.9.30). Solo falta **NOVA-SEMVER-22**. **Progreso: 31/32 actividades efectivas (96.9%)**.
 
-**Prioridad siguiente — Sprint 4 (NOVA-SEMVER-19-21 en curso, 22 despues):**
-1. ~~**NOVA-SEMVER-18**~~ ✅ Ya hecho (`docs/adrs/versioning/ADR-018-politica-de-versioning-y-bump.md`, 2026-07-09).
-2. **NOVA-SEMVER-19:** Invocar `reusable-build-matrix.yml` (ya existe en `nova-devops`) desde los 9 repos Gradle + 3 repos Maven (bootstrap de CI nuevo para `nova-bom`, `nova-java-spring-boot-parent`, `nova-java-spring-boot-archetype`, que no tenian ningun workflow).
-3. **NOVA-SEMVER-20:** Activar `reusable-owasp-check.yml` (ya existe) en los mismos repos. Requiere plugin `org.owasp.dependencycheck` en cada `build.gradle.kts` Gradle (Maven lo invoca ad-hoc via GAV, sin cambios al pom.xml).
-4. **NOVA-SEMVER-21:** Activar `reusable-sbom.yml` (ya existe) en los mismos repos. Requiere plugin `org.cyclonedx.bom` en Gradle.
-5. **NOVA-SEMVER-22:** Definir formato de matriz de compatibilidades (que version de cada lib es compatible con cual BOM).
+**Prioridad siguiente:**
+1. **NOVA-SEMVER-22:** Definir formato de matriz de compatibilidades (que version de cada lib es compatible con cual BOM). Ultima actividad de Sprint 4.
+
+**Deuda tecnica preexistente encontrada al activar 19/20/21, documentada en §11.9.30 (NO bloquea el cierre de Sprint 4, decision del usuario 2026-07-12: documentar sin corregir por ahora):**
+- **A:** `nova-java-mask-utils` — `checkstyleTest` falla con 43 violaciones reales en codigo de test (bug en como `reusable-build-gradle.yml` invoca la tarea, ignora la exclusion `sourceSets=[main]`).
+- **B:** `observability-spring-boot-starter`, `spring-boot-starter`, `commons-spring-boot-starter` — `401 Unauthorized` leyendo paquetes cross-repo; falta el secret `NOVA_PACKAGES_READ_TOKEN` (requiere que el usuario genere un PAT).
+- **C:** `nova-java-spring-boot-parent` — referencia `nova-spring-boot-bom:0.1.0-SNAPSHOT` (inexistente); el BOM real esta en `1.0.0`.
+- Estos 3 hallazgos dejan **5 PRs abiertos sin mergear** (`nova-java-mask-utils#2`, `observability-spring-boot-starter#2`, `spring-boot-starter#2`, `commons-spring-boot-starter#2`, `spring-boot-parent#1`) — los jobs nuevos (`matrix`/`owasp`/`sbom`) funcionan correctamente en todos, solo el job `build` preexistente falla por estas causas ajenas a Sprint 4.
+- **NVD API Key:** pendiente de parte del usuario (registro en tramite). Mientras tanto `owasp` corre en modo no-bloqueante (`continue-on-error` a nivel de step).
 
 **Canceladas por decision documentada (§11.9.29, NO son pendientes):**
 - **NOVA-SEMVER-14:** namespace Sonatype no viable con `pe.edu.nova` (dominio ficticio) → CANCELLED.
@@ -3449,7 +3482,15 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 - **NOVA-SEMVER-29:** generar claves GPG → CANCELLED (consecuencia de 14).
 
 **Backlog (opcional, baja prioridad):**
-- **NOVA-SEMVER-30:** Configurar variable `NOVA_PACKAGE_VISIBILITY` en los 19 repos (default `public` ya cubre el caso).
+- **NOVA-SEMVER-30:** Configurar variable `NOVA_PACKAGE_VISIBILITY` (default `public` ya cubre el caso).
+
+**Sprint 5 cerrado (NOVA-SEMVER-23-28, 6/6 ✅):**
+- NOVA-SEMVER-23 ✅ (Local Build Cache, `org.gradle.caching=true` en 10 repos)
+- NOVA-SEMVER-24 ✅ (Configuration Cache, `org.gradle.configuration-cache=true` en 10 repos)
+- NOVA-SEMVER-25 ✅ (Remote Build Cache, `gradle/actions/setup-gradle@v4` en `reusable-build-gradle.yml`)
+- NOVA-SEMVER-26 ✅ (3 composite actions nuevas: `nova-validate-build`, `nova-gather-facts`, `nova-publish-aggregator`; 1 descartada: `nova-configure-gradle-cache`)
+- NOVA-SEMVER-27 ✅ (migracion reusable workflows a composite actions, commit `97ee86b` 2026-07-09; 4 fixes posteriores: chmod gradlew, secret GH_TOKEN, vars en composite, pom.xml en gather-facts)
+- NOVA-SEMVER-28 ✅ (medicion de impacto: ~50% mejora total, Remote Cache ~48%, Local Cache ~57% entre runs, documentado en §11.9.28)
 
 **Sprint 5 cerrado (NOVA-SEMVER-23-28, 6/6 ✅):**
 - NOVA-SEMVER-23 ✅ (Local Build Cache, `org.gradle.caching=true` en 10 repos)
