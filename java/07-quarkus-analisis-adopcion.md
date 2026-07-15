@@ -450,14 +450,77 @@ Diagnostico (orden de descartes):
 | `quarkus-it` | ✅ SUCCESS | Tests `@QuarkusTest` validan end-to-end (`/hello`, `/hello/error`, `/hello/World`, ISO-8601) |
 | `matrix / Build (Java 25)` | ✅ SUCCESS | Compila y testea con Java 25 |
 | `matrix / Build (Java 21)` | ✅ SUCCESS | Compila y testea con Java 21 |
-| `build / build` | ✅ Esperado verde | Despues de fix `d82beaa` (checkstyle aplicado) |
-| `owasp / owasp-check` | ⚠️ Pendiente revisar | Posible timeout en sync NVD sin `NVD_API_KEY` (bug pre-existente, no relacionado al publish) |
+| `build / build` | ✅ SUCCESS | Despues de fix `d82beaa` (checkstyle aplicado) |
+| `owasp / owasp-check` | ✅ SUCCESS (tiempo OK) | OWASP analyze: 65s (vs 7+ min antes del fix `autoUpdate=false`) |
+| `owasp / owasp-check` | ⚠️ Falla por CVEs | 35 CVEs >= 7.0 en deps transitivas de Quarkus 3.33.2.1 (jackson, vertx, httpcore, guava, echarts, etc.). Ver §13 backlog. |
 
 Una vez configurado, el workflow `quarkus-it` (job custom en `.github/workflows/ci.yml`) ejecuta los 4 tests `@QuarkusTest` y valida end-to-end que:
 - `GET /hello` retorna 200 con `ApiResponse<Greeting>` JSON
 - `GET /hello/error` retorna 400 con `ApiResponse` conteniendo `ApiError(code=BAD_REQUEST)`
 - `GET /hello/World` retorna 200 con saludo personalizado
 - `Instant` en `ApiMetadata.generatedAt` se serializa como ISO-8601 (confirma que `ApiObjectMapperCustomizer` funciona)
+
+---
+
+## 13. Hallazgos y fixes OWASP (2026-07-15)
+
+### 13.1. Causa raiz del "cuelgue" de OWASP en CI
+
+El job `owasp / owasp-check` tardaba **7-15 minutos** por ejecucion. Diagnostico basado en logs reales:
+
+1. **Mirror download SÍ funciona** (4s): el step "Restore NVD mirror from nova-devops" descarga `dependency-check-data.zip` (119MB) correctamente desde `releases/tag/nvd-mirror`.
+2. **Pero el plugin OWASP Gradle IGNORA el mirror**: con `autoUpdate=true` (default), dispara full sync contra NVD → 366k records, 7+ min con HTTP 429 (rate-limit) sin `NVD_API_KEY`, 5-15 min CON key.
+3. **Bug sistémico**: los 9 repos Gradle de Nova que tienen `dependencyCheck { }` configurado **ninguno tiene `autoUpdate = false`**. Mismo bug latente en todos.
+4. **Extension sin plugin OWASP**: `nova-java-api-standard-quarkus-extension` no tenia el plugin aplicado, fallaba en 28s con "Task 'dependencyCheckAnalyze' not found".
+
+### 13.2. Fix aplicado
+
+**Commits**:
+- `nova-java-quarkus-example`: `9beab06` - agrega `autoUpdate = false` + `data.directory = NOVA_OWASP_DATA_DIR`.
+- `nova-java-api-standard-quarkus-extension`: `c0d07a7` - agrega `id("org.owasp.dependencycheck") version "12.2.2"` + mismo bloque `dependencyCheck { }`.
+
+**Resultado** (medido en CI run 29430967830, instance):
+
+| Step | Antes | Después |
+|---|---|---|
+| Restore NVD mirror | 4s | 5s |
+| **Run OWASP analyze** | **7m 19s** | **65s** ✅ |
+
+Reduccion de **85%** en tiempo de ejecucion. El mismo mirror pre-construido por `nova-devops/nvd-mirror-update.yml` (cron diario) ahora SÍ se respeta porque `autoUpdate=false` evita el full sync.
+
+### 13.3. CVEs HIGH/CRITICAL restantes (backlog)
+
+Despues del fix, el OWASP termina correctamente pero **falla por 35 CVEs con CVSS >= 7.0** en deps transitivas de Quarkus 3.33.2.1. Listado por paquete:
+
+| Paquete | CVEs destacados | CVSS | Notas |
+|---|---|---|---|
+| `jackson-databind-2.21.2.jar` | CVE-2026-54512 a 54518 | 7.5-9.8 | Dep de Quarkus REST, fix en Jackson 2.21.3+ |
+| `vertx-core-4.5.28.jar` (y modulos) | CVE-2026-15075, CVE-2026-15076 | 7.5 | Dep de Quarkus, fix en Vert.x 4.5.29+ |
+| `httpcore-4.4.16.jar` / `httpcore5-5.1.3.jar` | CVE-2026-54399, CVE-2026-54428 | 7.5-8.1 | Transitivo de Quarkus DevUI |
+| `echarts-6.0.0.jar` (Quarkus DevUI) | CVE-2026-45249 (~400 archivos JS) | 7.5 | Solo se carga en dev mode, no en runtime |
+| `markdown-it-14.1.0.jar` (Quarkus DevUI) | CVE-2026-2327, CVE-2026-48988 | 7.5 | Solo en dev mode |
+| `guava-31.1-jre.jar` | CVE-2023-2976, CVE-2020-8908 | 7.5 | FP conocido (NVD data accuracy, ya parcheado en Guava 32+) |
+| `qui-directory-tree-1.0.4.jar` / `qui-dot-0.0.2.jar` (mvnpm) | 40+ CVEs viejos del Quarkus dev tree | varios | Solo en dev mode |
+| `quarkus-hibernate-validator-spi-3.33.2.1.jar` | CVE-2023-1932 | 7.5 | Hibernate Validator, ya parcheado upstream |
+
+**Decision**: dejar como backlog (no bloqueante para Fase 0). Opciones de mitigacion futura:
+- (a) Subir Quarkus a 3.33.2.2+ o LTS 3.20.x cuando salga parche que cubra jackson/vertx.
+- (b) Documentar FPs en `nova-devops/docs/owasp-suppressions.json` para los CVEs que son NVD-data-accuracy.
+- (c) Para instances dev/demo: bajar `failBuildOnCVSS` a 9 (solo CRITICAL bloquea).
+- (d) Excluir `mvnpm`/`echarts`/`qui-*` con `suppressionFiles` especifico (solo dev mode).
+
+### 13.4. Cierre de Fase 0
+
+**Fase 0 CERRADA** (2026-07-15) con los siguientes logros:
+
+- ✅ Extension coloquial Nova ↔ Quarkus **publicado y consumible**: `pe.edu.nova.java.starters:nova-quarkus-api-ext:1.0.1` (artifactId corto, jandex.idx, `@ServerExceptionMapper` funciona).
+- ✅ Instance Quarkus **integrada end-to-end**: `ahincho/nova-java-quarkus-example` consume el extension, expone `/hello` con `ApiResponse<Greeting>`, tests `@QuarkusTest` validan happy path + exception mapping + subclass + path validation.
+- ✅ Pipeline CI reusable de `nova-devops` funciona con Quarkus (build + matrix Java 21/25 + sonar + sbom + owasp + quarkus-it).
+- ⚠️ OWASP detecta CVEs reales (no bug tecnico) - gestion via backlog.
+
+Siguiente paso: **Fase 1 (DDD + Bus, doc 08)**.
+
+---
 
 ### Fase 1: Adoptar DDD + Bus (doc 08, 1-2 semanas)
 
