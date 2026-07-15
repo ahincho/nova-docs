@@ -395,11 +395,12 @@ El extension original usaba `implements ExceptionMapper<Throwable>` que en Quark
 
 2. **`GITHUB_TOKEN` vs `NOVA_PACKAGES_READ_TOKEN`**: el `GITHUB_TOKEN` automatico NO puede leer packages de OTROS repos (solo del repo actual). Se necesita un fine-grained PAT con scope explicito `read:packages` para cross-repo reads. Workaround: `NOVA_PACKAGES_READ_TOKEN` env var leida por el `build.gradle.kts`.
 
-3. **`reusable-build-gradle.yml` ejecuta `./gradlew checkstyleMain`**: el extension necesitaba aplicar el plugin `checkstyle` y referenciar `config/checkstyle/checkstyle.xml`. Sin esto el task fallaba con `Task 'checkstyleMain' not found`.
+3. **`reusable-build-gradle.yml` ejecuta `./gradlew checkstyleMain`**: el extension necesitaba aplicar el plugin `checkstyle` y referenciar `config/checkstyle/checkstyle.xml`. Sin esto el task fallaba con `Task 'checkstyleMain' not found`. **Fix aplicado en ambos repos:**
+   - Extension: `commit a694b60` (estado al 2026-07-14, pre-Fase 0).
+   - Instance: `commit d82beaa` (2026-07-15) — mismo fix aplicado cuando se descubrio el mismo bug pre-existente en el instance.
+   - Documentacion del plugin jandex + el fix del checkstyle instance en §13.
 
-**Pendiente del lado del developer:**
-
-- Configurar el secret `NOVA_PACKAGES_READ_TOKEN` en `https://github.com/ahincho/nova-java-quarkus-example/settings/secrets/actions` con scope `read:packages` sobre los repos `ahincho/nova-java-api-standard-quarkus-extension` y `ahincho/nova-java-api-standard`. Sin este secret, el workflow CI de la instancia falla con `401 Unauthorized` al resolver la dep. Ver `.github/SECRETS_SETUP.md` del repo de la instancia.
+4. **`NOVA_PACKAGES_READ_TOKEN` ya NO es bloqueante para el instance** (2026-07-15): el reusable workflow `reusable-build-gradle.yml` usa `${{ secrets.NOVA_PACKAGES_READ_TOKEN || secrets.NOVA_RELEASE_PAT }}` como fallback (mismo patron que Sprint 4, §11.9.30 de doc 06). `NOVA_RELEASE_PAT` ya tiene scope suficiente para leer packages cross-repo, asi que el instance compila sin necesidad del secret dedicado. El `.github/SECRETS_SETUP.md` queda como referencia para quien quiera configurar el secret explicito (mejor performance).
 
 **Causa raiz del publish fantasma (descubierto 2026-07-15) — REABRE FASE 0:**
 
@@ -423,8 +424,6 @@ Diagnostico (orden de descartes):
 - `build.gradle.kts` de la instancia: URL del repo Maven sigue igual (es el GH repo, no el artifactId), pero la coordenada Maven ahora es `pe.edu.nova.java.starters:nova-quarkus-api-ext:1.0.0`.
 - README de la instancia: titulo y referencia al extension actualizados.
 - Limpiados 27 packages basura generados durante el diagnostico (nombres `nova-quarkus-ext`, `nova-api-std-quarkus-ext`, etc.) via API DELETE.
-
-**Pendiente:** tag `v1.0.0` en el repo del extension (con el nuevo artifactId) y verificacion end-to-end via el workflow `quarkus-it` de la instancia.
 
 **Cierre del publish fantasma (2026-07-15):**
 
@@ -570,15 +569,26 @@ Por proyecto, segun necesidad. Native build es opcional y se aborda caso por cas
 
 ## 11. Preguntas que quedan abiertas (revisar despues de Fase 0)
 
-1. **Quarkus LTS vs latest para produccion:** ¿empezamos con 3.37.x y migramos a 3.x LTS cuando se estabilice, o esperamos al proximo LTS? (asume respuesta: 3.37.x hasta Fase 1, evaluar LTS en estabilizacion).
-2. **Native build:** ¿es requisito o nice-to-have? (asume respuesta: nice-to-have por ahora, no en Fase 0/1).
-3. **Codestart oficial:** ¿publicar en Quarkiverse Hub o self-host? (asume respuesta: postergar a Fase 2+).
-4. **Naming del extension:** confirmado `nova-java-api-standard-quarkus-extension` (extension, NO starter — alineado con terminologia Quarkus, ver §4).
-5. **Bus implementations:** detalle en doc 08.
+1. **Quarkus LTS vs latest para produccion:** ✅ **Resuelta (2026-07-15).** Pin actual: **Quarkus 3.33.2.1 LTS** en extension + instance (alineado con el resto de starters Nova LTS del workspace, ver `gradle.properties` de ambos repos). Migracion a 3.37.x queda en backlog (no es bloqueante).
+2. **Native build:** ✅ **Resuelta (low priority).** Confirmado nice-to-have, no en Fase 0/1. Backlog.
+3. **Codestart oficial:** ⏳ **Sigue abierta.** Documentada en doc 09 como Fase 2.
+4. **Naming del extension:** ✅ **Resuelta (parcialmente).** El **repo name** sigue siendo `ahincho/nova-java-api-standard-quarkus-extension` (alineado con terminologia Quarkus). El **artifactId** se renombro a `nova-quarkus-api-ext` (20 chars) por el bug del publish fantasma (causa raiz documentada en §8). El nombre canonico Maven es `pe.edu.nova.java.starters:nova-quarkus-api-ext:1.0.1`.
+5. **Bus implementations:** ⏳ **Sigue abierta.** Plan detallado en doc 08 §3 (4 piezas) + §6.5 (plan detallado de Pieza 1). 4 decisiones pendientes del usuario en §6.5.9.
 
 ---
 
-## 12. Referencias oficiales consultadas
+## 12. Resumen ejecutivo del estado al 2026-07-15
+
+**Fase 0 cerrada** ✅. Nova Platform ya soporta Quarkus end-to-end:
+
+- ✅ Extension `nova-quarkus-api-ext:1.0.1` publicado en GitHub Packages.
+- ✅ Instance `nova-java-quarkus-example` consume el extension, tests `@QuarkusTest` verdes (4/4).
+- ✅ Pipeline CI reusable (build + matrix + owasp + sbom + quarkus-it) funcional.
+- ⚠️ OWASP detecta 35 CVEs reales en deps transitivas de Quarkus 3.33.2.1 (backlog).
+
+**Proximo paso sugerido:** doc 08 Fase 1 Pieza 1 (`nova-java-ddd-utils`), ~6h.
+
+## 14. Referencias oficiales consultadas
 
 - https://quarkus.io/guides/writing-extensions — guia oficial para escribir extensions Quarkus (incluye seccion sobre build steps).
 - https://quarkus.io/blog/tag/lts/ — releases LTS.

@@ -593,9 +593,9 @@ grep -l "ahincho/nova-devops.*reusable-release-publish" .github/workflows/publis
 | **GitHub Release auto** | ✅ OK (Sprint 3) | `release-please` crea GitHub Release al mergear PR de release |
 | **Composite actions** | ✅ OK | 6 implementadas (#5.4 Sprint 1 + Sprint 5: `nova-setup-java/node/gpg`, `nova-validate-build`, `nova-gather-facts`, `nova-publish-aggregator`). 1 descartada: `nova-configure-gradle-cache` (action oficial `gradle/actions/setup-gradle@v4` la reemplaza, ver §5.4.1) |
 | **Cache de Gradle distribuido** | Parcial | `setup-java` con cache local OK; remote via `gradle/actions` pendiente (NOVA-SEMVER-25) |
-| **Build matrix (multi-Java)** | ⏳ Pendiente | Solo Java 25 (NOVA-SEMVER-19) |
-| **SBOM (CycloneDX)** | ⏳ Pendiente | (NOVA-SEMVER-21) |
-| **OWASP dependency check** | ⏳ Pendiente | (NOVA-SEMVER-20) |
+| **Build matrix (multi-Java)** | ✅ OK (2026-07-12, Sprint 4) | Java 21 + 25 en paralelo (NOVA-SEMVER-19, ver §11.9.30) |
+| **SBOM (CycloneDX)** | ✅ OK (2026-07-12, Sprint 4) | CycloneDX Gradle/Maven plugins operativos en los 12 repos (NOVA-SEMVER-21, ver §11.9.30) |
+| **OWASP dependency check** | ✅ OK (2026-07-12, Sprint 4) | Workflow + plugin operativos; consume el mirror NVD de `nova-devops/releases/tag/nvd-mirror` para evitar full sync contra NVD (NOVA-SEMVER-20, ver §11.9.30 + nota de uso en doc 07 §13) |
 | **Code coverage badge** | ⏳ Pendiente | (NOVA-SEMVER-22) |
 | **Native image (GraalVM)** | ⏳ Pendiente | (fuera de sprints activos) |
 
@@ -3105,6 +3105,115 @@ pe.edu.nova.java.libs:nova-mapper-utils:1.0.0 (by constraint)
 
 **Estado:** ✅ **12/12 PRs mergeados**. Sprint 4 cerrado 6/6. Sprint 5 (reusable CI infra) queda validado por el camino largo — todos los workflows compartidos funcionan correctamente en repos Gradle y Maven, con todas las capacidades (matrix, OWASP, SBOM, publish cross-repo) operativas.
 
+#### 11.9.33. Registro central de falsos positivos CVE + opt-in por repo (2026-07-13)
+
+**Motivacion:** durante el cierre de Sprint 4 (NOVA-SEMVER-20 — OWASP gate), el repo `nova-java-observability-spring-boot-starter` quedaba con **1 CVE >= 7 residual** (`CVE-2026-53914` sobre `org.jetbrains.kotlin:kotlin-stdlib:2.4.0`) que NO se podia resolver via parche de version: el NVD data del mirror de nova-devops sigue reportando la CVE incluso para `2.4.0` (ultima estable disponible al 2026-07-13) y no existe una version parchada hacia arriba. Esto dejo en evidencia una limitacion del patron anterior (`<suppress><cve>...</cve></suppress>` hardcodeado en un archivo del repo consumidor): no hay quien documente **por que** se suprime una CVE, ni donde verificar si la suppression es vigente.
+
+**Decision adoptada:** registrar los FP documentados en un **catalogo central en `nova-devops`** y dejar que cada repo consumidor **opte in** via variable de repositorio. El registry es la unica fuente de verdad; el workflow reusable genera el XML dinamico en cada scan.
+
+**Diseno del mecanismo (commit `fd1b260` + `4559a3c` en `nova-devops`):**
+
+| Pieza | Ubicacion | Rol |
+|---|---|---|
+| Catalogo central de FPs | `nova-devops/docs/owasp-suppressions.json` | Lista de CVEs con `cve`, `package`, `package_manager`, `reason`, `verified_by`, `verified_date`, `status`, `expires_after`, `fixed_in`. Schema versionado (`"version": 1`). Una entrada por CVE. PR-able y revisable. |
+| Step generador de XML | `reusable-owasp-check.yml` step "Generate dynamic CVE suppression file" | Descarga el catalogo desde `raw.githubusercontent.com`, filtra por los CVEs declarados en la variable de repo, genera `/tmp/owasp/suppressions.xml` con `<packageUrl regex="true">pkg:$pmgr/$pkg@.*</packageUrl>`. |
+| Opt-in por repo | Variable de repo `NOVA_OWASP_CVE_SUPPRESSIONS="CVE-XXXX,CVE-YYYY"` | Lista de CVEs del catalogo que aplican a ese repo. Vacio = sin suppressions (default seguro). Precedencia: `inputs.cve-suppressions` > `vars.NOVA_OWASP_CVE_SUPPRESSIONS`. |
+| Consumer Gradle | `build.gradle.kts` dentro de `dependencyCheck { }` | Lee `System.getenv("NOVA_OWASP_SUPPRESSIONS_FILE")` y agrega el path a `suppressionFiles.add(path)`. Solo se activa si la env var esta presente y el archivo existe. |
+| Consumer Maven | `reusable-owasp-check.yml` step Maven | Apendice `-DsuppressionFiles=...` a la linea de `mvn` con el path generado. Si el usuario paso `inputs.suppression-file`, se concatenan (Maven acepta CSV). |
+
+**Por que `regex="true"` en `packageUrl` (leccion aprendida en CI run `29278748111`):** el matcher de `<packageUrl>` en dependency-check es **exacto por default**. La primera version del XML generado usaba `<packageUrl>pkg:maven/org.jetbrains.kotlin/kotlin-stdlib@*</packageUrl>` esperando que el `@*` se interpretara como wildcard de version. **No es asi** — el plugin reporto `Suppression Rule had zero matches: SuppressionRule{packageUrl=PropertyType{value=...kotlin-stdlib@*...}` porque el `@*` se trataba como asterisco literal, no como wildcard. La forma correcta de matchear "cualquier version" es `regex="true"` + `@.*`. Documentado en un comentario inline del step del workflow para evitar que alguien repita el error.
+
+**Por que `packageUrl` y no `cpe` (decision arquitectural):** `cpe:2.3:a:jetbrains:kotlin:*:*:*:*:*:*:*:*` seria valido para el producto "kotlin" pero matchearia **todos los productos JetBrains Kotlin** (no solo `kotlin-stdlib`). En cambio `pkg:maven/org.jetbrains.kotlin/kotlin-stdlib@.*` con regex es preciso: matchea solo el artifactId `kotlin-stdlib` (escapando el punto en `org.jetbrains` para no matchear accidentalmente `kotlinx`).
+
+**Por que un catalogo central y no un archivo per-repo:** tres razones concretas:
+1. **No hay duplicacion**: si 3 repos necesitan suprimir el mismo CVE, una sola entrada en el catalogo sirve para los 3 (cada uno la activa via su variable).
+2. **Trazabilidad**: la justificacion de cada FP vive al lado del CVE (un PR a `nova-devops/docs/owasp-suppressions.json` con la explicacion detallada). Con suppressions per-repo, la justificacion se pierde en Slack o en la cabeza de quien lo declaro.
+3. **Auditoria**: cualquier cambio al catalogo pasa por code review de `nova-devops`, igual que cualquier otro cambio al repo de infra. Las suppressions per-repo no se revisan en ningun lado central.
+
+**Estado conocido (2026-07-13, post-deploy del mecanismo):**
+
+| Repo | `NOVA_OWASP_CVE_SUPPRESSIONS` | CVEs >= 7 | CI status |
+|---|---|---|---|
+| `nova-java-observability-spring-boot-starter` | `CVE-2026-53914` | 0 (suprimido via registry) | ✅ PR #4 mergeado |
+
+Los 8 repos restantes NO tienen la variable configurada (no necesitan FPs). Si en el futuro surge un FP en cualquiera de ellos, el procedimiento es:
+1. PR a `nova-devops/docs/owasp-suppressions.json` con la nueva entrada.
+2. Merge del PR del catalogo primero.
+3. `gh variable set NOVA_OWASP_CVE_SUPPRESSIONS` en el repo consumidor.
+4. Re-run del job OWASP — el consumer block (5 lineas en `build.gradle.kts`) ya esta en todos los repos mergeados.
+
+**Lecciones operativas:**
+- **No aplicar suppressions ad-hoc per-repo sin documentarlas en el catalogo.** El mecanismo fue diseñado para que el `::warning::` del workflow ("CVE is in NOVA_OWASP_CVE_SUPPRESSIONS but not documented in registry") haga imposible silenciar un CVE sin pasar por el code review de `nova-devops`.
+- **El `@*` NO es wildcard de version** en `<packageUrl>`. Usar siempre `regex="true"` con `@.*` para "cualquier version".
+- **`suppressionFiles.add(path)` (String, no File)**: la propiedad en el plugin 12.2.2 es `ListProperty<String>`, no `ListProperty<File>`. Pasar un `File` da error de compilacion Kotlin DSL.
+
+#### 11.9.34. Fix de `release-please` en los 9 repos Gradle: 2 bugs pre-existentes + 1 version conflict (2026-07-13)
+
+**Contexto:** el mecanismo de versionado automatico via `release-please` (§5.0.4, §8.5) llevaba varios sprints sin validarse end-to-end en los 9 repos Gradle. El primer PR mergeado a `main` despues de Sprint 4 (PRs #4 de cada repo, 2026-07-13) expongo 3 problemas simultaneos que bloqueaban el ciclo automatico: 2 bugs pre-existentes en la configuracion de los repos consumidores + 1 version conflict pre-existente en GitHub Packages para un repo especifico. Diagnostico y fix documentados aqui para que no se repitan en futuras altas de repos.
+
+**Bug 1 (afecta 8 de 9 repos): wrapper `release-please.yml` no pasa `manifest-file` al reusable workflow.**
+
+| Pieza | Valor incorrecto | Valor correcto |
+|---|---|---|
+| `.github/workflows/release-please.yml` | sin bloque `with:` → `manifest-file` queda vacio en el reusable | `with: { release-type: java, path: ., config-file: ..., manifest-file: ... }` |
+
+Sintoma: en el log del job `release-please`, el input del action aparecia como `manifest-file: ` (vacio). Sin manifest, release-please no puede leer `.release-please-manifest.json` y no encuentra la version actual del proyecto.
+
+Explicacion del estado pre-existente: solo `nova-java-api-standard` tenia el wrapper bien configurado (probablemente escrito a mano en algun momento). Los otros 8 wrappers tenian la forma minima que el reusable workflow aceptaba pero sin propagar los inputs. Se deduce que el wrapper de api-standard es el patron canonico (es el unico que venia "ready" desde el principio); los otros 8 se crearon via copy-paste parcial y se quedaro sin el bloque `with:`. Todos los PRs de Sprint 4 (los #4 de cada repo) se mergearo via squash, lo que preservo esta inconsistencia sin notarla.
+
+**Bug 2 (afecta 8 de 9 repos): config sin `component` + `skip-snapshot` causa "Repository needs a snapshot bump" + "Empty change set".**
+
+Sintoma tras corregir el bug 1: release-please empieza a correr pero termina con `✔ No Java snapshot needed` (correcto) seguido de `✔ Empty change set provided. No changes need to be made. Cancelling workflow` y luego `release-please failed: Not Found - https://docs.github.com/rest/pulls/pulls#get-a-pull-request` (el Not Found es porque intenta actualizar un PR de release previo que ya no existe; efecto colateral del primer error).
+
+Causa raiz: el config actual tiene solo `package-name` y `release-type` dentro de `packages["."]`, sin los campos que el plugin 12.2.2 espera para Java:
+
+| Campo faltante | Valor agregado | Por que |
+|---|---|---|
+| `component` | `"<short-name>"` (ej. `nova-mask-utils`) | Necesario para que el `packageName` se infiera y se muestre en el log de release-please; sin el, el `❯ component:` aparece vacio en cada ejecucion y el plugin no puede asociar commits a un paquete |
+| `include-component-in-tag` (dentro del package) | `false` | Por default para Java, release-please construye el tag con el formato `<component>-v<version>` (ej. `nova-mask-utils-v1.0.0`); forzando `false` usa el formato `v<version>` que es el canonico de Nova y matchea los tags ya creados |
+| `skip-snapshot` | `true` | Sin el, release-please asume modo snapshot y aborta con "Repository needs a snapshot bump" cuando el manifest tiene una version no-snapshot como `1.0.0` |
+| `last-release-sha` (top-level) | SHA del tag `v1.0.0` | Workaround para un merge commit historico (§11.9.32, fix del cleanup de release-please en nova-devops) que el parser de conventional commits no podia digerir — sin este campo, el scanner de commits escaneaba TODO el historial y fallaba en ese commit |
+
+Referencia del estado correcto: `nova-java-mask-utils` (el unico repo que venia bien configurado desde antes) tiene los 4 campos. Ese es el patron canonico a replicar.
+
+**Bug 3 (afecta 1 de 9 repos): `nova-java-spring-boot-starter:1.0.1` ya existe en GitHub Packages.**
+
+Sintoma tras corregir bugs 1+2: el job `release-please` se ejecuto bien, abrio el PR de release `chore(main): release 1.0.1`, se mergeo, el tag `v1.0.1` se creo, el workflow `publish-on-tag.yml` se disparo correctamente, pero la tarea Gradle `./gradlew publish` fallo con:
+
+```
+> Could not PUT 'https://maven.pkg.github.com/ahincho/nova-java-spring-boot-starter/pe/edu/nova/java/starters/nova-spring-boot-starter/1.0.1/nova-spring-boot-starter-1.0.1.jar'.
+  Received status code 409 from server: Conflict
+```
+
+Causa raiz: el artifact `pe.edu.nova.java.starters:nova-spring-boot-starter:1.0.1` ya estaba publicado desde una ventana de republicacion previa documentada en §11.9.25 (republish del starter tras fix del bug D en Sprint 4). GitHub Packages es inmutable — no se puede republicar la misma coordenada `groupId:artifactId:version`. El manifest de release-please decia `1.0.0` (correcto, el codigo fuente esta en 1.0.0) pero el artifact publicado en GitHub Packages quedo en `1.0.1` (publicado durante la ventana de fix).
+
+Fix aplicado: bump manual del manifest a `1.0.2` en un commit `fix(release): bump manifest to 1.0.2 (1.0.1 already published, 409 Conflict)`. Push a `main` → release-please detecto el cambio en el manifest → abrio PR `chore(main): release 1.0.2` (automatico, sin intervencion manual adicional) → merge del PR → tag `v1.0.2` → `publish-on-tag.yml` → `1.0.2` publicado. Verificado con `git ls-remote --tags origin | grep v1.0` → confirma tag `v1.0.2` en `989072055dcf56939b595d7dd463c65fc50ebd2f`.
+
+**Lección de fondo (los 3 bugs juntos):** la primera vez que un repo Gradle de Nova mergea un PR a `main` que NO es un PR de release-please se exponen estos 3 problemas en cadena. Antes de Sprint 4, los 9 repos tenian main practicamente inmovil (los merges eran de inicializacion, no de feature work), asi que release-please nunca llegaba al step de fallar. A partir de ahora que el flujo esta activo, los 9 repos quedan con la config correcta y el proximo push convencional generara un PR de release sin intervencion manual.
+
+**Estado verificado (2026-07-13 20:25 UTC):**
+
+| Repo | tag publicado | publish-on-tag | Notas |
+|---|---|---|---|
+| `nova-java-mask-utils` | `v1.1.0` | success | sin cambios (ya estaba bien) |
+| `nova-java-api-standard` | `v1.0.1` | success | solo fix 1 (wrapper) |
+| `nova-java-date-utils` | `v1.0.1` | success | fixes 1+2 |
+| `nova-java-mapper-utils` | `v1.0.1` | success | fixes 1+2 |
+| `nova-java-observability-utils` | `v1.0.1` | success | fixes 1+2 |
+| `nova-java-spring-boot-starter` | `v1.0.2` | success | fixes 1+2+3 (bump por 409) |
+| `nova-java-commons-spring-boot-starter` | `v1.0.1` | success | fixes 1+2 |
+| `nova-java-observability-spring-boot-starter` | `v1.0.1` | success | fixes 1+2 (adicionalmente ya tiene el consumer block de FP suppression, §11.9.33) |
+| `nova-java-spring-boot-gradle-plugin` | `v1.0.1` | success | fixes 1+2 |
+
+**Diagnostico futuro (cheatsheet):** si release-please falla en un repo Gradle nuevo, el patron de error indica el bug:
+
+| Patron de error en el log | Bug | Fix |
+|---|---|---|
+| `manifest-file: ` (vacio) + "commit could not be parsed" en merge commit historico | Bug 1 (wrapper sin `with:`) + Bug 2 (config incompleta) | Replicar el wrapper de `nova-java-api-standard` + copiar los 4 campos de `nova-java-mask-utils` al config |
+| `✔ No latest release found` + `Repository needs a snapshot bump` | Bug 2 falta `skip-snapshot: true` o `component` | Agregar los 4 campos de `nova-java-mask-utils` al config |
+| `Empty change set` despues de los fixes 1+2 | El `lastReleaseSha` apunta a un SHA que NO es el del tag | Re-leer el SHA de `git ls-remote --tags origin v1.0.0` y reescribir el config |
+| `Could not PUT ... 409 Conflict` durante `publish-on-tag` | Bug 3: la version ya existe en GitHub Packages | Bump manual del manifest a la siguiente version disponible; commit + push deja a release-please generar el PR de release de la nueva version |
+
 ---
 
 ## 12. Roadmap de adopcion (propuesto)
@@ -3165,7 +3274,7 @@ pe.edu.nova.java.libs:nova-mapper-utils:1.0.0 (by constraint)
 ### Sprint 4 — Publicacion a Maven Central y optimizaciones
 
 17. **NOVA-SEMVER-17:** ❌ **CANCELLED** (§11.9.29). Publicar a Maven Central via Sonatype Central Portal — descartado por decision del usuario (misma razon que NOVA-SEMVER-14).
-18. **NOVA-SEMVER-18:** ✅ Documentar politica de bump. Hecho en `docs/adrs/versioning/ADR-018-politica-de-versioning-y-bump.md` (2026-07-09, "Aceptada (implementada)"), ya referenciado en §11.8.3 y §11.9.17 como "politica ADR-018". Cubre version inicial (1.0.0, no 0.x.y), mapa commit-type→bump, no pre-releases, manejo de bugs post-release, breaking changes con el BOM coordinador, y formato de tags.
+18. **NOVA-SEMVER-18:** ✅ Documentar politica de bump. Hecho en `adrs/versioning/ADR-018-politica-de-versioning-y-bump.md` (2026-07-09, "Aceptada (implementada)"), ya referenciado en §11.8.3 y §11.9.17 como "politica ADR-018". Cubre version inicial (1.0.0, no 0.x.y), mapa commit-type→bump, no pre-releases, manejo de bugs post-release, breaking changes con el BOM coordinador, y formato de tags.
 19. **NOVA-SEMVER-19:** ✅ Activado `reusable-build-matrix.yml` (Java 21 + 25) en los 12 repos con CI. Validado con PRs reales: 12/12 100% verdes y mergeados (§11.9.30/31/32).
 20. **NOVA-SEMVER-20:** ✅ Activado `reusable-owasp-check.yml` (CVEs) en los 12 repos. Requirio agregar el plugin `org.owasp.dependencycheck` (12.2.2) + corregir 2 bugs reales del workflow reusable (§11.9.30). Corre en modo no-bloqueante hasta que llegue la NVD API Key.
 21. **NOVA-SEMVER-21:** ✅ Activado `reusable-sbom.yml` (CycloneDX) en los 12 repos. Requirio agregar el plugin `org.cyclonedx.bom` (3.2.4) + corregir bug de permisos (`contents: write`) en 2 repos nuevos (§11.9.30).
@@ -3356,7 +3465,7 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 | **Secrets de GPG** (NOVA-SEMVER-29) | Documentado, NO generados | Cuando se decida publicar a Maven Central (backlog) |
 | **Namespace `pe.edu.nova` en Sonatype** | No solicitado | Crear ticket en `issues.sonatype.org` (futuro, Sprint 3) |
 | **Tabla de compatibilidades** (NOVA-SEMVER-22) | Pendiente | No se ha definido el formato ni la fuente de datos (Sprint 4) |
-| **ADRs en `docs/adrs/`** | ✅ **23 archivos creados** (15 Java/shared + 8 NestJS placeholders) | Pendiente: commit + push al docs repo |
+| **ADRs en `adrs/`** | ✅ **24 archivos commiteados** (15 Java/shared + 8 NestJS + 1 versioning) en repo `ahincho/nova-docs` desde el 2026-07-09 (commit `aed5313` resuelve colision de numeracion ADR-018 y sincroniza estado NOVA-SEMVER-18) | Nada. Listado completo en `git ls-files adrs/` |
 | **NestJS versioning** | Fuera de alcance | Se abordara en un roadmap separado |
 | **Bugs documentados en §11.7** (4 bugs + 1 limitacion) | ✅ **DOCUMENTADOS** (2026-07-09) | Pendiente: reportar limitacion de reusable + tag push a GitHub Support |
 | **Bugs y hallazgos de §11.9** (25 items, validacion end-to-end 2026-07-10) | ✅ **20/25 corregidos o resueltos**; 2 descartados (falsos positivos); 1 documentado como limitacion sin accion posible (logs historicos); 2 documentados como no bloqueantes (bug cosmetico de `release-please-action`, contenido obsoleto de `nova-bom:1.0.0` por el 409 Conflict) | Ninguna critica. Los 2 items solo documentados sin fix no son bloqueantes. La cadena end-to-end esta cerrada para los 9 repos Gradle + el BOM. |
@@ -3393,7 +3502,7 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 - **Todos los repos Gradle usan `net.nemerosa.versioning` 4.0.1**.
 - **Todos los repos Java tienen `commitlint.config.js` + `lefthook.yml`**.
 - **3 repos migrados de Maven a Gradle**: mask-utils, observability-utils, starter (cumplen la convencion Gradle-first).
-- **23 ADRs creados** en `docs/adrs/` (15 shared/java + 8 NestJS placeholders), pendientes de commit + push.
+- **24 ADRs creados y commiteados** en `adrs/` (15 shared/java + 8 NestJS + 1 versioning), en repo `ahincho/nova-docs` desde 2026-07-09.
 
 **Que se completo en Pre-req + Sprint 0 + Sprint 1 + Sprint 2 + Sprint 3 parcial + Sprint 5 parcial + Post-Sprint 0 (4 + 4 + 4 + 4 + 2 + 4 + 1 = 23 actividades):**
 - ✅ **NOVA-SEMVER-00a:** `gradle.properties` en 10 repos Gradle.
@@ -3499,7 +3608,7 @@ Una vez configuradas las tres, el flujo es equivalente al de npm:
 
 ### Pendiente antes de NOVA-SEMVER-14
 
-- **ADRs (23 archivos)** en `D:\Galaxy\Projects\docs\adrs\`: `shared/` (10), `java/` (5), `nest/` (8 placeholders). **Estado verificado 2026-07-09: siguen sin commitear** (untracked en `git status` de `D:\Galaxy\Projects\docs\`). Pendiente: `git add adrs/ && git commit` en el docs repo.
+- ~~**ADRs (23 archivos)** en `D:\Galaxy\Projects\docs\adrs\`: `shared/` (10), `java/` (5), `nest/` (8 placeholders). **Estado verificado 2026-07-09: siguen sin commitear** (untracked en `git status` de `D:\Galaxy\Projects\docs\`). Pendiente: `git add adrs/ && git commit` en el docs repo.~~ ✅ **Resuelto el 2026-07-09 (commit `7b4f555`)**: 24 ADRs commiteados en `adrs/` (no `docs/adrs/`), ultimo sync `aed5313`. Ver `git ls-files adrs/` para el listado completo.
 - ~~**Test del primer release**~~ — **Flujo 100% automatico validado end-to-end y replicado en 9 de 9 repos Gradle + los 4 BOMs** (ver §11.9.14, §11.9.22-26): merge del PR de release-please → tag creado con el PAT real → `publish-on-tag.yml` disparado automaticamente sin intervencion manual → artefacto publicado en GitHub Packages. En el proceso se encontraron y corrigieron 20 hallazgos adicionales (3 modulos con `publishing{}` incompleto, gap de resolucion de dependencias cross-repo, 3 bugs en `nova-devops` nunca antes ejercitados, `nova-bom` nunca publicado, secret corrupto en `mapper-utils`, workaround del 409 Conflict en BOMs, y el **bug critico de Gradle con `${property}` references** — ver §11.9.16-26). **Cadena completa, todos los repos publicando.**
 - ~~**`NOVA_RELEASE_PAT`**~~ — **Resuelto el 2026-07-10:** el usuario reemplazo el placeholder por el PAT real en los 10 repos (incluyendo `mapper-utils`, que inicialmente tenia un valor invalido — §11.9.22); confirmado funcionando en produccion en los 9 repos Gradle + el BOM (§11.9.14, §11.9.23, §11.9.25) incluyendo lectura cross-repo de paquetes (§11.9.17).
 - ~~**`release-please` roto en `nova-java-api-standard`**~~ — **Resuelto el 2026-07-10** (§11.9.12): tags huerfanos eliminados, `nova-bom` corregido, PR de release verificado y mergeado con exito (§11.9.14).
