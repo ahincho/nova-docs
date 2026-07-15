@@ -1,8 +1,9 @@
-﻿# 11. Plan de limpieza de pipelines y securizaciÃ³n de tokens
+# 11. Plan de limpieza de pipelines y securizaciÃ³n de tokens
 
-> **Estado (2026-07-15):** Fases 0, 1, 1.5 y 2 âœ… **completadas**. Pendiente: Fase 3 (migraciÃ³n
-> de los 18 repos restantes, ahora con el patrÃ³n `workflow_run` descubierto en Fase 2 â€” ver
-> Â§11.11) + decisiones estratÃ©gicas D3-D8.
+> **Estado (2026-07-15):** Fases 0, 1, 1.5, 1.6, 2 y 3 âœ… **completadas** (12 repos migrados).
+> Pendiente: configurar `NOVA_PACKAGES_READ_TOKEN` en 7 repos con deps cross-repo (B/C/D),
+> luego borrar `NOVA_RELEASE_PAT` de esos 7. Decisiones estratÃ©gicas D5-D8 despriorizadas
+> (sin `NOVA_RELEASE_PAT` no queda PAT que migrar a identidad dedicada para CI/CD).
 > **Fecha:** 2026-07-15.
 > **Aplica a:** Equipo Nova, mantenedores de `nova-devops`, security audit de la org `ahincho`.
 
@@ -21,7 +22,8 @@ publicados en la org `ahincho`. Se identificaron **3 problemas concretos** + 1 b
 | Repos Nova publicados en `ahincho` | **29** (19 Java + 4 NestJS + 6 varios) |
 | Workflows reusables en `nova-devops` | **13 reusables + 2 single-purpose** (post-Fase 1: se borraron 10 reusables muertos) |
 | Composite actions en `nova-devops` | 6 (`nova-setup-{java,node,gpg}`, `nova-validate-build`, `nova-gather-facts`, `nova-publish-aggregator`) |
-| Repos con secretos Nova configurados | **22 / 29** (post-Fase 2: extension Quarkus pasÃ³ de 2 tokens a 1) |
+| Repos con `workflow_run` pattern | **14** (post-Fase 3: piloto + 12 rÃ©plicas + extension Quarkus previa) |
+| Repos con `NOVA_RELEASE_PAT` | **8** (post-Fase 3: eran 19, ahora 8) |
 
 ### 11.1.2 Problemas detectados (resumen ejecutivo)
 
@@ -29,7 +31,7 @@ publicados en la org `ahincho`. Se identificaron **3 problemas concretos** + 1 b
 |---|---|---|---|
 | 1 | **10** workflows reusables con **0 consumidores** (6 multi-registry + 2 version-bump + changelog + commitlint) | Media (deuda tÃ©cnica) | âœ… **Fase 1 COMPLETADA** â€” commit `1a61e83` |
 | 2 | `nova-java-api-standard-quarkus-extension` tiene ambos tokens (`NOVA_PACKAGES_READ_TOKEN` + `NOVA_RELEASE_PAT`) â€” el segundo es redundante | Baja (redundancia) | âœ… **Fase 2 COMPLETADA** â€” commit `a6d6013` con patrÃ³n `workflow_run` (Â§11.11) |
-| 3 | `NOVA_RELEASE_PAT` se usa **solo como fallback de read** en 18 repos restantes, no para release operations | Media (segregaciÃ³n de privilegios) | â³ **Pendiente Fase 3** â€” ahora replicable con patrÃ³n `workflow_run` (Â§11.11) |
+| 3 | `NOVA_RELEASE_PAT` se usa **solo como fallback de read** en 18 repos restantes, no para release operations | Media (segregacion de privilegios) | [OK] **Fase 3 COMPLETADA** (12 repos migrados, 7 con `NOVA_RELEASE_PAT` aun pendiente de borrar tras configurar READ) |
 | 4 | 4 repos NestJS sin secretos ni pipelines | Backlog (fuera de alcance) | Backlog (Â§11.6) |
 
 ---
@@ -429,7 +431,7 @@ nvd-mirror-update.yml                â†’ usar secrets.NOVA_RELEASE_PAT dire
 
 | Secret | # repos | CategorÃ­a | AcciÃ³n |
 |---|---|---|---|
-| `NOVA_RELEASE_PAT` | **18** (era 19, -1 por Fase 2) | GitHub token (PAT classic personal) | **Replicar patrÃ³n `workflow_run` (Â§11.11) en Fase 3 para eliminarlo de los 18 repos restantes** |
+| `NOVA_RELEASE_PAT` | **8** (post-Fase 3: eran 19, ahora 6 borrados + 2 especiales sin uso) | GitHub token (PAT classic personal) | Ver Â§11.12 para plan de eliminacion de los 7 restantes |
 | `NOVA_PACKAGES_READ_TOKEN` | 3 (+ 1 que tambiÃ©n tenÃ­a RELEASE = 4 con READ) | GitHub token (read-only) | Mantener, propagar a los 18 restantes (Fase 3) |
 | `NVD_API_KEY` | 14 | API key externa (NIST NVD) | Mantener (no es GitHub token) |
 | `NOVA_SONAR_TOKEN` | **0** (dormant) | API key externa (SonarCloud) | Renombrado 2026-07-15. Dormant hasta integraciÃ³n de Sonar. Ver Â§11.10. |
@@ -506,7 +508,8 @@ Riesgos restantes del plan `workflow_run`:
 | **1** | Borrar 10 workflows muertos (commit `1a61e83`) | Cero | 5 min | âœ… **COMPLETADA** |
 | **1.5** | Rename `SONAR_TOKEN` â†’ `NOVA_SONAR_TOKEN` (commit `06c808a`, pre-auditorÃ­a) | Cero (no hay repos con SONAR_TOKEN configurado) | 5 min | âœ… **COMPLETADA** |
 | **2** | Borrar `NOVA_RELEASE_PAT` del extension Quarkus + patrÃ³n `workflow_run` (commit `a6d6013`) | Bajo | 25 min | âœ… **COMPLETADA** |
-| **3** | Replicar patrÃ³n `workflow_run` en los 18 repos restantes para eliminar `NOVA_RELEASE_PAT` | Bajo-medio | 4-6 h (18 repos Ã— ~15 min) | â³ **Pendiente** (validaciÃ³n post-deploy en extension primero) |
+| **3** | Replicar patron workflow_run en los repos restantes para eliminar NOVA_RELEASE_PAT | Bajo-medio | ~3 h (12 repos x ~15 min) | [OK] **COMPLETADA** (12 repos migrados; piloto en 
+ova-java-mask-utils valido el patron) |
 | **4** | Crear machine user / GitHub App `nova-bot` (opcional, ya no es bloqueante) | Bajo | 2-3 h | â¸ï¸ **Despriorizado** (sin `NOVA_RELEASE_PAT` no queda PAT que migrar) |
 | **5** | Generar `NOVA_PACKAGES_READ_TOKEN` desde identidad dedicada (no personal) | Bajo | 1-2 h | â¸ï¸ **Pendiente decisiÃ³n D6** |
 | **6** | Backlog NestJS (ver Â§11.6) | â€” | â€” | Backlog |
@@ -813,6 +816,92 @@ y confirmar que `publish-on-tag.yml` se ejecuta vÃ­a `workflow_run` y publica
 correctamente. Si funciona, replicar a los 18 repos. Si no funciona, documentar el
 issue y volver al plan fallback (mantener PAT).
 
+---
+
+## 11.12 Ejecución de Fase 3 (2026-07-15)
+
+### 11.12.1 Resultado global
+
+**12 repos migrados** al patrón `workflow_run` en una sola sesión. Patrón validado previamente
+en `nova-java-mask-utils` como piloto.
+
+| Categoría | # | Repos | Template | NOVA_RELEASE_PAT borrado |
+|---|---|---|---|---|
+| A (Gradle básico) | 5 | api-standard, date-utils, mapper-utils, observability-utils, spring-boot-gradle-plugin | A | ✅ Sí |
+| B (Gradle + read fallback) | 3 | commons-spring-boot-starter, observability-spring-boot-starter, spring-boot-starter | B | ⏸️ Conservado (espera READ) |
+| C1 (Gradle custom + -P flags) | 2 | notifications-micronaut-module, notifications-quarkus-extension | C1 | ⏸️ Conservado |
+| C2 (Gradle custom + resolve_token) | 1 | notifications-spring-boot-starter | C2 | ⏸️ Conservado |
+| D (Maven) | 1 | notifications | D | ⏸️ Conservado |
+| **Piloto previo** | 1 | mask-utils | (Fase 2) | ✅ Sí |
+| **Total migrado** | **13** | | | **6 con PAT borrado** |
+
+### 11.12.2 Validación del patrón
+
+**Piloto `nova-java-mask-utils`** (3 runs de validación):
+1. `29452432571` (post-merge del PR de release): ✅ Publicó v1.1.1 correctamente.
+2. `29452655737` (post-chore sin release): ✅ Skip correcto con `workflow_run`.
+3. `29452725417` (post-cleanup): ✅ Skip correcto.
+
+**Bug detectado y corregido durante validación**:
+- Detect step original solo comparaba `tag version == manifest version`, lo que hacía
+  re-publicar la versión anterior si release-please corría sin crear release (409 Conflict).
+- Fix: comparar SHA del tag con `head_sha` del workflow_run. Si no matchean → skip.
+
+```yaml
+# Fix añadido a todos los templates (A/B/C/D):
+if [ -n "${WORKFLOW_RUN_HEAD_SHA}" ]; then
+  TAG_SHA=$(git rev-list -n 1 "${LATEST_TAG}" 2>/dev/null || echo "")
+  if [ "${TAG_SHA}" != "${WORKFLOW_RUN_HEAD_SHA}" ]; then
+    echo "::notice::Tag ${LATEST_TAG} was NOT created in this workflow_run. Skipping."
+    echo "should_publish=false" >> "$GITHUB_OUTPUT"
+    exit 0
+  fi
+fi
+```
+
+### 11.12.3 Pendientes post-Fase 3
+
+**7 repos con `NOVA_RELEASE_PAT` aún presente** (B/C/D) — necesitan configurar
+`NOVA_PACKAGES_READ_TOKEN` antes de poder borrar el PAT:
+
+| Repositorio | Categoría | Acción del usuario |
+|---|---|---|
+| `nova-java-commons-spring-boot-starter` | B | Generar y configurar `NOVA_PACKAGES_READ_TOKEN` → luego `gh secret delete NOVA_RELEASE_PAT` |
+| `nova-java-observability-spring-boot-starter` | B | Idem |
+| `nova-java-spring-boot-starter` | B | Idem |
+| `nova-java-notifications-micronaut-module` | C1 | Idem |
+| `nova-java-notifications-quarkus-extension` | C1 | Idem |
+| `nova-java-notifications-spring-boot-starter` | C2 | Idem |
+| `nova-java-notifications` | D | Idem |
+
+**Comando para configurar `NOVA_PACKAGES_READ_TOKEN`** (repetir por repo):
+```bash
+gh secret set NOVA_PACKAGES_READ_TOKEN --repo ahincho/<repo> --body "<token-value>"
+# O a nivel org (preferido):
+gh secret set NOVA_PACKAGES_READ_TOKEN --org ahincho --visibility all --body "<token-value>"
+```
+
+**2 repos con `NOVA_RELEASE_PAT` residual (no necesita migración de workflows)**:
+- `nova-devops`: el `publish-on-tag.yml` usa `secrets: inherit` hacia el reusable; el reusable
+  ya no requiere PAT. **PAT se puede borrar sin cambios adicionales.**
+- `nova-java-spring-boot-parent`: parent POM sin `publish-on-tag.yml` ni `release-please.yml`.
+  El PAT es completamente residual. **Se puede borrar directamente.**
+
+### 11.12.4 Decisiones que YA NO son necesarias
+
+- **D5** (machine user / GitHub App): despriorizada. Sin `NOVA_RELEASE_PAT` activo en CI/CD,
+  no hay PAT que migrar a identidad dedicada. Riesgo de blast radius personal eliminado.
+- **D7** (`GH_TOKEN` como nombre de input): irrelevante. El caller ya no necesita pasar PAT.
+- **D8** (GitHub App vs machine user): irrelevante por la misma razón.
+
+### 11.12.5 Cambios colaterales recomendados (no urgentes)
+
+1. **`nova-devops/publish-on-tag.yml`**: actualizar a `workflow_run` para consistencia con el
+   resto del ecosistema. Hoy sigue con `push:tags` (heredado del Sprint 3). No es crítico
+   porque el repo no usa release-please (no hay tag push automatizado).
+2. **`nova-java-quarkus-archetype` y `nova-java-quarkus-parent`**: tienen referencia
+   `NOVA_RELEASE_PAT` en workflows (probablemente heredado de templates), aunque el secret
+   no está configurado. Limpiar las referencias para evitar confusión.
 
 ---
 
