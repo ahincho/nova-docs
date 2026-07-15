@@ -650,12 +650,12 @@ Cuando se reactive la integraciÃ³n con SonarCloud:
    para los 15 Java libs + 3 demos + devops; las 4 NestJS no, salvo que tambiÃ©n publiquen).
 3. **Generar un token de SonarCloud** (no es un token de GitHub â€” estÃ¡ fuera del modelo
    de 2 tokens).
-4. **Configurar `NOVA_SONAR_TOKEN`** en cada repo (secret a nivel de repo o de org):
+4. **Configurar `NOVA_SONAR_TOKEN`** en cada repo (cuenta personal, solo admite secrets a nivel de repo):
    ```bash
    gh secret set NOVA_SONAR_TOKEN --repo ahincho/<repo> --body "<sonar-token>"
-   # O a nivel org:
-   gh secret set NOVA_SONAR_TOKEN --org ahincho --visibility all --body "<sonar-token>"
    ```
+   **Nota**: `ahincho` es una cuenta personal de GitHub, no una organización, por lo que
+   no existen organization-level secrets. El secret debe configurarse repo por repo.
 5. **Validar que el step de Sonar corre** (quitar el `::warning::`, ver anÃ¡lisis en
    SonarCloud dashboard).
 6. **Documentar Quality Gates** en `docs/java/06-semantic-versioning-en-java.md` (o un
@@ -665,7 +665,7 @@ Cuando se reactive la integraciÃ³n con SonarCloud:
 
 | # | Pregunta |
 |---|---|
-| Â¿Sonar a nivel repo o nivel org? | Org reduce config (1 secret para todos) pero requiere que los proyectos SonarCloud existan antes. Repo da granularidad. |
+| Cuesta configurar 14 veces (1 por repo, no hay org-level secrets en cuenta personal)? | Alternativa: script PowerShell que itere los 14 repos con gh secret set. |
 | Â¿Coverage mÃ­nimo como Quality Gate? | Si se establece, builds fallarÃ¡n si coverage < X%. Hoy no hay enforcement. |
 | Â¿Aplicar tambiÃ©n a las 4 NestJS? | Si se quiere calidad uniforme. Requiere crear proyecto SonarCloud para Node. |
 | Â¿Migrar a SonarQube self-hosted en lugar de SonarCloud? | Mayor control, pero requiere infra. |
@@ -874,11 +874,25 @@ fi
 | `nova-java-notifications-spring-boot-starter` | C2 | Idem |
 | `nova-java-notifications` | D | Idem |
 
-**Comando para configurar `NOVA_PACKAGES_READ_TOKEN`** (repetir por repo):
+**Comando para configurar `NOVA_PACKAGES_READ_TOKEN`** (repetir por repo, no hay org-level secrets en cuenta personal):
 ```bash
 gh secret set NOVA_PACKAGES_READ_TOKEN --repo ahincho/<repo> --body "<token-value>"
-# O a nivel org (preferido):
-gh secret set NOVA_PACKAGES_READ_TOKEN --org ahincho --visibility all --body "<token-value>"
+```
+
+**Alternativa con script** (para los 7 repos B/C/D, evita tipear 7 veces):
+```bash
+$repos = @(
+  "nova-java-commons-spring-boot-starter",
+  "nova-java-observability-spring-boot-starter",
+  "nova-java-spring-boot-starter",
+  "nova-java-notifications-micronaut-module",
+  "nova-java-notifications-quarkus-extension",
+  "nova-java-notifications-spring-boot-starter",
+  "nova-java-notifications"
+)
+foreach ($r in $repos) {
+  gh secret set NOVA_PACKAGES_READ_TOKEN --repo "ahincho/$r" --body "<token-value>"
+}
 ```
 
 **2 repos con `NOVA_RELEASE_PAT` residual (no necesita migración de workflows)**:
