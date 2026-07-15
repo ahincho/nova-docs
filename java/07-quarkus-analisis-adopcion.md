@@ -426,6 +426,33 @@ Diagnostico (orden de descartes):
 
 **Pendiente:** tag `v1.0.0` en el repo del extension (con el nuevo artifactId) y verificacion end-to-end via el workflow `quarkus-it` de la instancia.
 
+**Cierre del publish fantasma (2026-07-15):**
+
+| Version | Tag | artifactId | Tamaño JAR | Estado |
+|---|---|---|---|---|
+| 1.0.0 | `v1.0.0` | `nova-quarkus-api-ext` | 4462b | ✅ Publicado, artefactos descargables (`.pom` 1538b, `.jar` 4462b, `.module` 2841b) |
+| 1.0.1 | `v1.0.1` | `nova-quarkus-api-ext` | 5286b | ✅ Publicado, incluye `META-INF/jandex.idx` (generado por `org.kordamp.gradle.jandex` v2.3.0) |
+
+**Hallazgos adicionales del cierre (2026-07-15):**
+
+4. **`@ServerExceptionMapper` no se descubre en deps externas sin jandex.idx**: cuando el extension se compila como JAR y se consume desde otro proyecto, los beans CDI (`@Singleton`, `@ApplicationScoped`, `@ServerExceptionMapper`) no se registran automaticamente. El `ApiExceptionMapper` quedaba inerte en la instancia. **Fix:** agregar `id("org.kordamp.gradle.jandex") version "2.3.0"` al extension — genera `META-INF/jandex.idx` con el indice de beans. Verificado en 1.0.1.
+
+5. **Tests `@QuarkusTest` invalidos en la instancia**: dos bugs pre-existentes en `GreetingResourceTest`:
+   - `body("name", is(null))`: `is(null)` no es un matcher Hamcrest valido, debe ser `nullValue()`.
+   - `blankPathMapsToBadRequest`: pasar el parametro en la URL (`get("/hello/   ")`) causa doble-encoding por RestAssured. La forma correcta es `pathParam("name", "   ").get("/hello/{name}")`.
+
+6. **`checkstyleMain` task missing en la instancia** (commit `d82beaa`): mismo bug ya documentado en bullet 3 para el extension. La instancia no aplicaba el plugin `checkstyle` y `reusable-build-gradle.yml` ejecuta `./gradlew checkstyleMain`. **Fix:** agregar `id("checkstyle")` al `build.gradle.kts` + crear `config/checkstyle/checkstyle.xml` con reglas minima (sun_checks base + `LineLength` 140 para tolerar el header de `@ServerExceptionMapper`).
+
+**Estado CI del instance `ahincho/nova-java-quarkus-example`:**
+
+| Job | Estado | Notas |
+|---|---|---|
+| `quarkus-it` | ✅ SUCCESS | Tests `@QuarkusTest` validan end-to-end (`/hello`, `/hello/error`, `/hello/World`, ISO-8601) |
+| `matrix / Build (Java 25)` | ✅ SUCCESS | Compila y testea con Java 25 |
+| `matrix / Build (Java 21)` | ✅ SUCCESS | Compila y testea con Java 21 |
+| `build / build` | ✅ Esperado verde | Despues de fix `d82beaa` (checkstyle aplicado) |
+| `owasp / owasp-check` | ⚠️ Pendiente revisar | Posible timeout en sync NVD sin `NVD_API_KEY` (bug pre-existente, no relacionado al publish) |
+
 Una vez configurado, el workflow `quarkus-it` (job custom en `.github/workflows/ci.yml`) ejecuta los 4 tests `@QuarkusTest` y valida end-to-end que:
 - `GET /hello` retorna 200 con `ApiResponse<Greeting>` JSON
 - `GET /hello/error` retorna 400 con `ApiResponse` conteniendo `ApiError(code=BAD_REQUEST)`
