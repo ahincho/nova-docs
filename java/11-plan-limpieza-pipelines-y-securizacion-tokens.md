@@ -1,10 +1,11 @@
 # 11. Plan de limpieza de pipelines y securizaciÃ³n de tokens
 
-> **Estado (2026-07-15):** Fases 0, 1, 1.5, 1.6, 2 y 3 âœ… **completadas** (12 repos migrados).
-> Pendiente: configurar `NOVA_PACKAGES_READ_TOKEN` en 7 repos con deps cross-repo (B/C/D),
-> luego borrar `NOVA_RELEASE_PAT` de esos 7. Decisiones estratÃ©gicas D5-D8 despriorizadas
-> (sin `NOVA_RELEASE_PAT` no queda PAT que migrar a identidad dedicada para CI/CD).
-> **Fecha:** 2026-07-15.
+> **Estado (2026-07-16):** Fases 0, 1, 1.5, 1.6, 2, 3, 4 y 5 âœ… **completadas** (13 repos migrados).
+> `NOVA_RELEASE_PAT` eliminado de los 14 repos que lo tenian. 0 secrets residuales en toda
+> la org `ahincho`. Decisiones estrategicas D5-D8 despriorizadas (sin `NOVA_RELEASE_PAT` no
+> queda PAT que migrar a identidad dedicada para CI/CD). Ver §11.13 para los detalles de la
+> migracion a Gradle de `nova-java-architecture-rules` y los 3 bugs descubiertos.
+> **Fecha:** 2026-07-16.
 > **Aplica a:** Equipo Nova, mantenedores de `nova-devops`, security audit de la org `ahincho`.
 
 ---
@@ -916,6 +917,216 @@ foreach ($r in $repos) {
 2. **`nova-java-quarkus-archetype` y `nova-java-quarkus-parent`**: tienen referencia
    `NOVA_RELEASE_PAT` en workflows (probablemente heredado de templates), aunque el secret
    no está configurado. Limpiar las referencias para evitar confusión.
+
+---
+
+## 11.13 Migracion a Gradle de `nova-java-architecture-rules` (cierre del ultimo NOVA_RELEASE_PAT)
+
+> **Estado (2026-07-16):** âœ… **COMPLETADA**. `nova-java-architecture-rules` migrado de Maven
+> a Gradle, alineado con el resto de B/C/D. `NOVA_RELEASE_PAT` borrado del repo. CI validado
+> end-to-end con PR #3 (todos los 7 jobs verdes). Releases v1.1.0 + v1.1.1 publicadas con
+> GITHUB_TOKEN puro. **0 secrets en el repo.**
+
+### 11.13.1 Contexto: el ultimo repo con `NOVA_RELEASE_PAT` activo
+
+Despues de Fase 3, 11/14 repos quedaron limpios de `NOVA_RELEASE_PAT`. El unico repo donde
+el secret aun se justificaba era `nova-java-architecture-rules` (creado 2026-07-16, mismo
+dia que arranco esta auditoria): su `ci.yml` referenciaba el PAT en `<password>` dentro de
+un `settings.xml` custom para resolver packages cross-repo de Maven.
+
+Auditoria del workflow original (commit `ea1d2b5`):
+
+```yaml
+# ci.yml, lineas 34 y 39
+<password>${{ secrets.NOVA_RELEASE_PAT }}</password>
+```
+
+Ademas el workflow estaba **roto desde el primer push** por un bug que se descubrio al
+investigar el secret:
+
+```yaml
+# Step 18: setup-java@v4 con settings-path crea el DIRECTORIO
+- name: Setup JDK 25 (Temurin)
+  uses: actions/setup-java@v4
+  with:
+    settings-path: ${{ github.workspace }}/.mvn-settings.xml  # â†’ mkdir
+
+# Step 26: cat > falla porque el path ya existe como directorio
+- name: Configure Maven Settings (cross-repo reads)
+  run: cat > .mvn-settings.xml <<'EOF'  # â†’ "Is a directory" (exit 1)
+```
+
+El primer run de CI fallo con `exit 1` en el step "Configure Maven Settings" **antes** de
+que el PAT se usara nunca. El secret `NOVA_RELEASE_PAT` estaba configurado pero el workflow
+nunca llego a autenticarse contra Maven Central / GitHub Packages.
+
+### 11.13.2 Decision: migrar a Gradle, no a Maven-fix
+
+Tres opciones sobre la mesa:
+
+| Opcion | Veredicto | Por que |
+|---|---|---|
+| A) Workflow minimalista en Maven (sin custom settings) | Descartada | El repo quedaria inconsistente: B/C/D en Gradle, architecture-rules en Maven. Ademas la publicacion seguiria requiriendo PAT para `mvn deploy`. |
+| B) Workflow tag-based + `workflow_run` en Maven (como B/C/D) | Descartada | Misma razon: inconsistencia + duplicacion de patterns. |
+| C) **Migrar todo el repo a Gradle** (recomendada) | **Adoptada** | Consistencia con el resto de B/C/D, publicacion con GITHUB_TOKEN puro via `workflow_run` heredado de `reusable-publish-gradle.yml`, mismo set de plugins (jacoco, checkstyle, owasp, cyclonedx, versioning). |
+
+### 11.13.3 Ejecucion de la migracion
+
+Commit `be78ec2` ("feat: migrate from Maven to Gradle + adopt Nova Platform workflow",
+2026-07-16) reemplazo el repo entero:
+
+- **Eliminado**: `pom.xml`, `target/` (Maven build output).
+- **Agregado build system**: `build.gradle.kts` (java-library + maven-publish + jacoco +
+  checkstyle + owasp dependencycheck + cyclonedx-bom + versioning), `settings.gradle.kts`,
+  `gradle.properties` (group=`pe.edu.nova.java.libs`, version desde manifest, config cache).
+- **Agregado Gradle wrapper**: copiado desde `nova-java-mask-utils` (mismo Gradle 9.2.0).
+- **Agregado workflows**: `ci.yml` (usa `reusable-build-gradle.yml`, `reusable-sonarcloud-gradle.yml`,
+  `reusable-build-matrix.yml`, `reusable-owasp-check.yml`, `reusable-sbom.yml` desde
+  `ahincho/nova-devops/.github/workflows/`), `release-please.yml` (GITHUB_TOKEN puro),
+  `publish-on-tag.yml` (`workflow_run` trigger + `reusable-publish-gradle.yml` pattern).
+- **Agregado configs**: `.release-please-config.json` (component=`nova-architecture-rules`,
+  package-name=`pe.edu.nova.java.libs:nova-architecture-rules`), `.release-please-manifest.json`
+  (arranca en `1.0.0`), `commitlint.config.js`, `package.json`, `lefthook.yml`.
+
+Resultado: `pom.xml` borrado, `build.gradle.kts`+`settings.gradle.kts`+`gradle.properties`
+nuevos, **16 archivos cambiados, 682 lineas agregadas, 163 borradas** en un solo commit.
+
+### 11.13.4 Tres bugs descubiertos durante la ejecucion
+
+#### Bug 1: `gradle-wrapper.jar` no se commiteo
+
+El `.gitignore` original del repo (copiado del `pom.xml`-era) tenia `*.jar` global. Cuando
+se hizo `git add -A`, el `gradle/wrapper/gradle-wrapper.jar` fue **ignorado silenciosamente**.
+
+**Sintoma** (primer publish-on-tag run, conclusion `failure`):
+```
+Error: Could not find or load main class org.gradle.wrapper.GradleWrapperMain
+Caused by: java.lang.ClassNotFoundException: org.gradle.wrapper.GradleWrapperMain
+```
+
+**Fix** (commit `487839c` "fix(build): track gradle-wrapper.jar"):
+- Reemplazado `.gitignore` con version limpia (sin `*.jar` global), copiada de mask-utils.
+- `git add -f gradle/wrapper/gradle-wrapper.jar` para forzar el track.
+- Este commit genero el release 1.1.1 (Conventional Commits: `fix:`).
+
+#### Bug 2: `default_workflow_permissions=read` bloquea release-please
+
+El primer run de `release-please.yml` fallo con:
+```
+release-please failed: GitHub Actions is not permitted to create or approve pull requests.
+```
+
+El setting por defecto del repo era `default_workflow_permissions=read` y
+`can_approve_pull_request_reviews=false`. Hay que activar ambos a nivel de repo:
+
+```bash
+gh api -X PUT "repos/ahincho/nova-java-architecture-rules/actions/permissions/workflow" \
+  -f "default_workflow_permissions=write" \
+  -F "can_approve_pull_request_reviews=true"
+```
+
+**Aplicabilidad**: este setting hay que activarlo **una vez por repo** que use release-please.
+Los 11 B/C/D ya lo tenian porque se hizo durante su migracion. Para repos nuevos es
+trivial olvidarselo. Documentar en §11.13.7.
+
+#### Bug 3: `config/checkstyle/checkstyle.xml` ausente
+
+El `reusable-build-gradle.yml` de `ahincho/nova-devops` corre `./gradlew checkstyleMain`
+como step separado (despues de `build`). El plugin de Gradle busca el config file en
+`config/checkstyle/checkstyle.xml` por convencion.
+
+**Sintoma** (primer run del PR #3, conclusion `failure` en 3 jobs: build + matrix x2):
+```
+> Task :checkstyleMain FAILED
+> Unable to create Root Module: config {/path/config/checkstyle/checkstyle.xml}.
+> BUILD FAILED in 21s
+```
+
+**Fix** (PR #3, segundo commit): copiado `config/checkstyle/checkstyle.xml` desde
+`nova-java-mask-utils` (73 lineas, baseline Nova Platform). Validacion local: build
+SUCCESSFUL con 9 warnings de `MemberName` (snake_case en `@ArchTest` fields) que no fallan
+el build por estar en `severity="warning"`.
+
+**Aplicabilidad**: cualquier repo nuevo que migre a Gradle en Nova Platform **debe** trackear
+`config/checkstyle/checkstyle.xml` antes de mergear el primer PR, o el CI va a fallar.
+
+### 11.13.5 Validacion end-to-end (PR #3)
+
+PR #3 ("test: validate CI pipeline on first PR") mergeado con squash. Resultado: **7/7 jobs
+verdes** (run `29464717530`):
+
+| Job | Resultado | Tiempo | Notas |
+|---|---|---|---|
+| `build / build` | âœ… success | 42s | Gradle compile + test + jar + checkstyle (9 warnings, 0 errors) |
+| `matrix / Build (Java 21)` | âœ… success | 56s | Toolchain 21 (matrix paralelo) |
+| `matrix / Build (Java 25)` | âœ… success | 43s | Toolchain 25 (default) |
+| `owasp / owasp-check` | âœ… success | 1m 41s | NVD mirror restaurado desde nova-devops/shared baseline |
+| `sbom / sbom` | âœ… success | 28s | CycloneDX BOM generado |
+| `sonar / sonar-analysis` | âœ… success | 3s | Skip limpio (sin `NOVA_SONAR_TOKEN`) |
+| `matrix / summary` | âœ… success | 2s | Resumen del matrix |
+
+Pipeline completa: PR â†’ checks verdes â†’ squash merge â†’ release-please detecta el commit
+(pero como es `test:`, **no bumpea**) â†’ publish-on-tag triggers via `workflow_run` con
+detect step â†’ skip (no hay nuevo tag) â†’ manifest sin cambio (1.1.1 estable).
+
+### 11.13.6 Comportamiento release-please con commits no-user-facing
+
+Hallazgo interesante: el commit del PR #3 fue `test: validate CI pipeline on first PR`.
+Al mergear, release-please no creo un nuevo PR porque:
+
+```
+✔ No user facing commits found since 0825bec - skipping
+```
+
+Release-please solo cuenta como user-facing: `feat:`, `fix:`, `perf:`. Los tipos `test:`,
+`docs:`, `style:`, `chore:`, `refactor:`, `build:`, `ci:` **no generan release**.
+
+**Implicacion**: el flujo `PR â†’ merge â†’ release-please â†’ tag â†’ publish` es robusto
+contra commits triviales. Solo los commits conventional que indican cambio user-facing
+disparan el pipeline de release. Manifest queda estable en `1.1.1`.
+
+### 11.13.7 Lecciones aprendidas documentables
+
+Checklist para futuros repos que migren de Maven a Gradle en Nova Platform:
+
+1. **Trackear `config/checkstyle/checkstyle.xml`** desde el primer commit. Sin el, el
+   `reusable-build-gradle.yml` falla en `checkstyleMain`. Archivo: 73 lineas, copiable
+   desde `nova-java-mask-utils` o `nova-java-commons-spring-boot-starter`.
+
+2. **Trackear `gradle/wrapper/gradle-wrapper.jar` con `git add -f`**. El `.gitignore`
+   **nunca** debe tener `*.jar` global. Si venia de un template Maven, hay que limpiarlo.
+
+3. **Activar workflow permissions del repo** antes del primer push:
+   ```bash
+   gh api -X PUT "$REPO/actions/permissions/workflow" \
+     -f "default_workflow_permissions=write" \
+     -F "can_approve_pull_request_reviews=true"
+   ```
+   Sin esto, release-please falla con "not permitted to create or approve pull requests".
+
+4. **No pushear el PAT literal al repositorio local ni al remoto**. El secret
+   `NOVA_RELEASE_PAT` debe vivir **solo** en GitHub Secrets (no en codigo, no en `cat` en
+   consola, no en commits). Si se pega accidentalmente, `git reflog expire --expire=now --all`
+   + `git gc --prune=now --aggressive` lo limpia del reflog (probado en `nova-docs`,
+   commit `88b4621`).
+
+5. **Validar el primer PR antes de mergear commits user-facing**. El primer PR deberia
+   ser de smoke-test (cambio trivial) para validar que el CI este verde end-to-end
+   antes de mergear features.
+
+### 11.13.8 Inventario final de tokens (post-Fase 5)
+
+| Token | Repos (al 2026-07-16) | Notas |
+|---|---|---|
+| `NOVA_RELEASE_PAT` | **0** | Eliminado del ultimo repo (architecture-rules). Antes: 14. |
+| `NOVA_PACKAGES_READ_TOKEN` | 7 (B/C/D) | Sin cambios desde Fase 1. Fine-grained token "nova-java-release-please" (revocado en UI). |
+| `NVD_API_KEY` | 14 | Sin cambios. Usado por `reusable-owasp-check.yml`. |
+| `NOVA_SONAR_TOKEN` | 0 | Pendiente de activacion (backlog §11.10). |
+
+**Resultado**: la org `ahincho` opera con 0 PATs activos en CI/CD. Toda publicacion se
+hace con `GITHUB_TOKEN` puro via patron `workflow_run` (ver §11.11). El blast radius de
+un compromise de tokens queda limitado a NVD_API_KEY (que es publica, rate-limit, no
+secreto).
 
 ---
 
