@@ -1,5 +1,12 @@
 # Evaluacion de Madurez - Galaxy Training Meta-Framework (NestJS)
 
+> **Documento historico, no describe el estado actual.** Evalua el diseno anterior al colapso
+> de 2026-09-05: once paquetes bajo el scope `@galaxy-training/`, repartidos en cuatro
+> repositorios que hoy estan archivados. El stack vive ahora en `ahincho/nova-nestjs` con tres
+> paquetes bajo `@ahincho/`. Ver [ADR-025](../adrs/nest/ADR-025-tres-paquetes-en-lugar-de-once.md).
+>
+> Se conserva porque el inventario y las notas de madurez explican por que se colapso.
+
 ## Resumen Ejecutivo
 
 El meta-framework Galaxy Training para NestJS se encuentra en **fase Alpha con una base conceptualmente solida** y un nivel de madurez ligeramente superior al lado Java en consistencia de build y patron de configuracion. La arquitectura de 5 niveles esta correctamente implementada: librerias puras en TypeScript, NestJS Modules como starters, un agregador principal, BOM/Parent simulados, y un script de publicacion local. Sin embargo, comparte el deficit critico de testing (solo `mask-utils` tiene tests) y carece de tooling de generacion de proyectos.
