@@ -82,9 +82,9 @@ ADR-021 se cerró el 2026-09-06 en Vitest y está publicado en `@ahincho/nova-ne
 Con eso ADR-016 dejó de depender de él: la bandera `--experimental-vm-modules` desapareció y el
 piso de Node bajó de `>=24.9` a `>=24`.
 
-ADR-022 está aceptada por mitades. **El linter se cerró el 2026-09-06 en oxlint** y está
-publicado en 0.7.0; **el formateador sigue abierto** entre Prettier y oxfmt, con la recomendación
-de esperar a que oxfmt llegue a 1.0.
+ADR-022 está aceptada por mitades, pero **ya no queda nada que ejecutar**. El linter se cerró
+el 2026-09-06 en oxlint y está publicado en 0.7.0; el formateador se queda en Prettier, con el
+disparador de revisión atado a que oxfmt publique su 1.0.
 
 ## Formato
 

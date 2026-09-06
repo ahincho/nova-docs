@@ -3,7 +3,8 @@
 ## Estado
 
 **Parcialmente aceptada.** El linter está decidido e implementado: oxlint, publicado en
-`@ahincho/nova-nestjs` 0.7.0. **El formateador sigue abierto** entre Prettier y oxfmt.
+`@ahincho/nova-nestjs` 0.7.0. **El formateador se queda en Prettier**, con fecha de revisión
+atada a que oxfmt publique su 1.0; hasta entonces no hay nada que ejecutar.
 
 **Scope:** `nest`
 
@@ -14,7 +15,7 @@
 ## Fecha
 
 Medición: 2026-09-04 y 2026-09-06. Linter decidido e implementado: 2026-09-06. Formateador:
-pendiente.
+resuelto el 2026-09-06 como «Prettier por ahora», a revisar cuando oxfmt publique 1.0.
 
 ## Contexto
 
@@ -57,26 +58,70 @@ El toolchain publica `oxlint/oxlintrc.json` en vez del preset plano de ESLint, y
 { "scripts": { "lint": "oxlint --type-aware" } }
 ```
 
-### Formateador: sigue abierto
+### Formateador: Prettier, y se vuelve a mirar cuando oxfmt llegue a 1.0
 
-Entre seguir en Prettier y pasar a oxfmt. Vuelto a medir sobre el repositorio de la plataforma,
-143 archivos:
+**Decidido que no se cambia todavía.** No es que oxfmt sea peor -midiéndolo no le encontramos
+ningún defecto-, es que la ganancia no paga el costo de migrar dos veces.
 
-|                | Tiempo | Difieren de Prettier            | Markdown             | YAML   |
-| -------------- | ------ | ------------------------------- | -------------------- | ------ |
-| Prettier 3.9   | 1.41 s | -                               | sí                   | sí     |
-| oxfmt 0.66     | 0.75 s | **1** (un tipo unión largo)     | sí, byte a byte      | sí     |
-| Biome 2.5.12   | 0.88 s | 5 (unión, arreglos JSON juntos) | **no, los ignora**   | **no** |
+Medido sobre el repositorio de la plataforma, 146 archivos versionados, las dos herramientas con
+el mismo método de reloj y tres corridas cada una:
 
-**Biome no formatea Markdown ni YAML**: los reporta como «rutas provistas pero ignoradas».
-Comprobado sobre un `.md` deliberadamente desordenado, donde Prettier y oxfmt producen la misma
-salida y Biome deja el archivo intacto. Para un repositorio cuya documentación son catorce
-archivos Markdown, eso solo ya lo descarta.
+|                | Tiempo         | Difieren de Prettier            | Markdown           | YAML   |
+| -------------- | -------------- | ------------------------------- | ------------------ | ------ |
+| Prettier 3.9.6 | 1426 - 1492 ms | -                               | sí                 | sí     |
+| oxfmt 0.66.0   | 931 - 1006 ms  | **1** (un tipo unión largo)     | sí, byte a byte    | sí     |
+| Biome 2.5.12   | ~880 ms        | 5 (unión, arreglos JSON juntos) | **no, los ignora** | **no** |
 
-La recomendación sobre la mesa es **quedarse en Prettier y pasar a oxfmt cuando llegue a 1.0**.
-Hoy está en 0.66.0, beta desde el 2026-02-24, y la ganancia a este tamaño de repositorio es de
-0.66 segundos. Cambiar de formateador ensucia el historial de todo archivo que toque, así que no
-conviene hacerlo dos veces.
+El tiempo de Biome viene de la medición anterior, tomada con otro método, así que no es
+comparable renglón a renglón con los otros dos. Da igual: Biome está descartado por lo que no
+formatea, no por lo que tarda.
+
+La única diferencia de oxfmt está en `packages/core/src/auth/tokens.ts`, un tipo unión largo que
+parte en líneas con el pipe adelante y Prettier deja en una. Es cosmético, y discutiblemente más
+legible el de oxfmt.
+
+#### oxfmt no tiene el hueco de cobertura que tiene Biome
+
+Es la comprobación que decide entre los dos, y hay que hacerla con archivos **deliberadamente
+desordenados**: sobre un árbol ya formateado por Prettier, «no hay diferencias» no distingue
+entre «formatea igual» y «no lo tocó».
+
+Hecha así, con un archivo desordenado de cada uno de los seis tipos que hay en el repositorio
+-Markdown, YAML, JSON, `.mjs`, `.d.mts` y `.ts`-, oxfmt produce **la misma salida byte a byte**
+que Prettier en los seis. También conserva los comentarios del `.oxlintrc.json`.
+
+**Biome, en ese mismo test, deja el Markdown y el YAML intactos**: los reporta como «rutas
+provistas pero ignoradas». Para un repositorio cuya documentación son catorce archivos Markdown,
+eso solo ya lo descarta, y por corrección y no por velocidad.
+
+#### Por qué se espera igual
+
+**oxfmt está en 0.66.0, publicada el 2026-09-01, con minors semanales y ningún 1.0 anunciado.**
+Ese es todo el argumento. Un formateador existe para producir bytes estables; uno pre-1.0 puede
+cambiar su salida entre versiones menores, y cada cambio de salida reescribe archivos en todo el
+repositorio y ensucia el `blame`. Ese costo se paga una vez, así que conviene pagarlo cuando la
+salida ya no se mueva.
+
+**La ganancia son cinco décimas de segundo.** Comparar con el linter, que pasó de 14.4 s a
+0.75 s: ahí el número justificaba solo la migración, acá no.
+
+**Esperar no cuesta nada.** Prettier no está en riesgo de quedar sin mantenimiento y NestJS 12 no
+trae formateador por defecto, así que quedarse no desalinea con nada.
+
+#### Cuándo volver a mirarlo, y qué hacer entonces
+
+El disparador es **oxfmt 1.0.0 en `latest`**. Cuando salga, el motivo para migrar no va a ser la
+velocidad sino la consolidación: un solo proveedor para lint y formato, mismo proyecto Oxc, mismo
+estilo de configuración, mismo `--migrate`. Es el mismo argumento que ya rindió con oxlint.
+
+La migración ya está probada y es barata: `oxfmt --migrate=prettier` leyó el `.prettierrc`,
+arrastró los patrones del `.prettierignore` y no inventó opciones. Nada que ver con
+`biome migrate prettier`, que puso `semicolons: "asNeeded"` y borró todos los punto y coma de 76
+archivos.
+
+Al migrar hay que decidir una sola cosa: si se acepta el corte de oxfmt en los tipos unión largos
+-que reformatea ese archivo- o si se busca la opción que lo evite. Se acepta, previsiblemente: el
+punto de un formateador es no discutirle.
 
 ### Husky no se adopta
 
