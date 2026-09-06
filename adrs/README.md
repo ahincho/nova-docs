@@ -75,7 +75,7 @@ sin redactar, no temas fuera de alcance.
 | 021 | [Framework de Testing](nest/ADR-021-jest-testing.md) | Aceptada (implementada) | Testing |
 | 022 | [Linter y Formateador](nest/ADR-022-eslint-prettier-husky.md) | Parcialmente aceptada | Calidad |
 | 023 | [Swagger/OpenAPI](nest/ADR-023-swagger-openapi.md) | Pendiente | Documentacion |
-| 024 | [NestJS 10.x como Framework Backend](nest/ADR-024-nestjs-framework.md) | Pendiente | Framework |
+| 024 | [NestJS 12 como Framework Backend](nest/ADR-024-nestjs-framework.md) | Aceptada (implementada) | Framework |
 | 025 | [Tres Paquetes NestJS en Lugar de Once](nest/ADR-025-tres-paquetes-en-lugar-de-once.md) | Aceptada | Arquitectura |
 
 ADR-021 se cerró el 2026-09-06 en Vitest y está publicado en `@ahincho/nova-nestjs` 0.6.0.
@@ -85,6 +85,9 @@ piso de Node bajó de `>=24.9` a `>=24`.
 ADR-022 está aceptada por mitades, pero **ya no queda nada que ejecutar**. El linter se cerró
 el 2026-09-06 en oxlint y está publicado en 0.7.0; el formateador se queda en Prettier, con el
 disparador de revisión atado a que oxfmt publique su 1.0.
+
+ADR-024 se redactó el 2026-09-06 al subir a NestJS 12, publicado en 0.8.1. El placeholder decía
+«NestJS 10.x» y llevaba dos versiones mayores de atraso.
 
 ## Formato
 
