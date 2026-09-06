@@ -73,7 +73,7 @@ sin redactar, no temas fuera de alcance.
 | 019 | [TypeScript 5.x en Modo Estricto](nest/ADR-019-typescript-estricto.md) | Pendiente | Lenguaje |
 | 020 | [ORM para Persistencia](nest/ADR-020-orm-persistencia.md) | Pendiente | Persistencia |
 | 021 | [Framework de Testing](nest/ADR-021-jest-testing.md) | Aceptada (implementada) | Testing |
-| 022 | [Linter y Formateador](nest/ADR-022-eslint-prettier-husky.md) | Propuesta | Calidad |
+| 022 | [Linter y Formateador](nest/ADR-022-eslint-prettier-husky.md) | Parcialmente aceptada | Calidad |
 | 023 | [Swagger/OpenAPI](nest/ADR-023-swagger-openapi.md) | Pendiente | Documentacion |
 | 024 | [NestJS 10.x como Framework Backend](nest/ADR-024-nestjs-framework.md) | Pendiente | Framework |
 | 025 | [Tres Paquetes NestJS en Lugar de Once](nest/ADR-025-tres-paquetes-en-lugar-de-once.md) | Aceptada | Arquitectura |
@@ -82,9 +82,9 @@ ADR-021 se cerró el 2026-09-06 en Vitest y está publicado en `@ahincho/nova-ne
 Con eso ADR-016 dejó de depender de él: la bandera `--experimental-vm-modules` desapareció y el
 piso de Node bajó de `>=24.9` a `>=24`.
 
-ADR-022 sigue en `Propuesta` a medias. El linter ya está decidido -oxlint sobre ESLint, con las
-mediciones escritas- y el formateador sigue abierto entre Prettier y oxfmt, que todavía es
-pre-1.0.
+ADR-022 está aceptada por mitades. **El linter se cerró el 2026-09-06 en oxlint** y está
+publicado en 0.7.0; **el formateador sigue abierto** entre Prettier y oxfmt, con la recomendación
+de esperar a que oxfmt llegue a 1.0.
 
 ## Formato
 
