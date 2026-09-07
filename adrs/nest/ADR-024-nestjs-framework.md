@@ -45,11 +45,19 @@ tests de `core` pasaron sin tocar un solo import.
 | Qué                                              | Por qué                                                                                      |
 | ------------------------------------------------ | -------------------------------------------------------------------------------------------- |
 | `routeConflictPolicy: { duplicate: 'error', shadow: 'warn' }` | una ruta duplicada es siempre un error; corta el arranque en vez de la primera petición |
-| `return503OnClosing: true`                       | la mitad del apagado ordenado que los hooks no cubren                                          |
+| `return503OnClosing: true`                       | la mitad del apagado ordenado que los hooks no cubren, sobre conexiones ya abiertas             |
 | `errorCode` en el filtro global                  | un código de dominio sin escribir una excepción por cada uno                                   |
 
 Las tres van dentro de `bootstrap()`, que es donde viven las decisiones que todos los servicios
 tomaban igual. `routeConflictPolicy` se puede relajar con la opción `routeConflicts`.
+
+**`return503OnClosing` actúa sobre las conexiones ya establecidas, y conviene saberlo antes de
+probarlo.** Medido con el cierre disparado en t=1200 ms: la petición en vuelo terminó **200** a
+los 3021 ms, una nueva por la conexión ya abierta recibió **503** y una por una conexión TCP
+nueva recibió **`ECONNREFUSED`** -el listener ya dejó de aceptar, así que no hay petición HTTP
+que contestar-. Para el caso real es lo correcto, porque un balanceador mantiene la conexión
+abierta; pero **un `curl` suelto muestra el rechazo y no el 503**, y se lee como que la opción no
+funciona.
 
 ### Lo que se deja fuera, y por qué
 
