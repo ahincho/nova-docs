@@ -79,6 +79,7 @@ paquetes publicados en `ahincho/nova-nestjs`. **Ya no queda ningun placeholder s
 | 026 | [Generador de Servicio y Reglas de Arquitectura](nest/ADR-026-generador-de-servicio-y-reglas-de-arquitectura.md) | Aceptada (implementada) | Arquitectura |
 | 027 | [Una Imagen de Contenedor para Todos los Servicios](nest/ADR-027-imagen-de-contenedor-compartida.md) | Aceptada (implementada) | Despliegue |
 | 028 | [Changesets y Versionado `0.x` para NestJS](nest/ADR-028-changesets-y-versionado-cero-x.md) | Aceptada (implementada) | Versioning |
+| 029 | [Sin Reintentos ni Corte de Circuito en el Cliente HTTP](nest/ADR-029-sin-reintentos-en-el-cliente-http.md) | Aceptada | Resiliencia |
 
 ADR-021 se cerró el 2026-09-06 en Vitest y está publicado en `@ahincho/nova-nestjs` 0.6.0.
 Con eso ADR-016 dejó de depender de él: la bandera `--experimental-vm-modules` desapareció y el
@@ -106,6 +107,12 @@ los había escrito nadie. Lo que sí corrige es que ADR-007 reclamaba alcance so
 ADR-018 anunciaba un ADR que nunca llegó, así que los dos describían el stack de una forma que
 no coincidía con el código. **Un ADR aceptado que dice algo falso se lee como norma**, y ese es
 el motivo de cerrarlo antes de una publicación y no después.
+
+ADR-029 documenta una **ausencia**, que es el tipo de ADR que más falta hace y menos se escribe.
+El cliente HTTP no reintenta ni abre circuitos, y eso nunca se decidió: no se escribió. Un
+revisor que abriera el módulo no podía saber si faltaba o si se había descartado. Se cierra en
+«no», con las tres razones y con el disparador que obliga a revisarlo. Mismo espíritu que
+ADR-020, que se cerró sin elegir porque la pregunta no aplicaba.
 
 ADR-026 se agrega el mismo día para el generador de servicio y sus reglas de arquitectura
 ejecutables, que hasta entonces sólo estaban documentadas en el README del paquete.
