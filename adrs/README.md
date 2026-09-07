@@ -63,20 +63,20 @@ Decisiones sobre politica de versionado y bump. Actualmente exclusivo del stack 
 ## ADRs NestJS (`nest/`)
 
 Decisiones especificas del stack NestJS. **El stack entro en alcance el 2026-09-05**, con tres
-paquetes publicados en `ahincho/nova-nestjs`; los ADR que siguen en `Pendiente` son placeholders
-sin redactar, no temas fuera de alcance.
+paquetes publicados en `ahincho/nova-nestjs`. **Ya no queda ningun placeholder sin redactar.**
 
 | # | ADR | Estado | Tema |
 |---|---|---|---|
 | 016 | [Node.js 24 como Version Objetivo](nest/ADR-016-node-version-objetivo.md) | Aceptada | Build System |
-| 017 | [pnpm como Package Manager](nest/ADR-017-pnpm-package-manager.md) | Pendiente | Build System |
-| 019 | [TypeScript 5.x en Modo Estricto](nest/ADR-019-typescript-estricto.md) | Pendiente | Lenguaje |
-| 020 | [ORM para Persistencia](nest/ADR-020-orm-persistencia.md) | Pendiente | Persistencia |
+| 017 | [pnpm como Package Manager](nest/ADR-017-pnpm-package-manager.md) | Aceptada (implementada) | Build System |
+| 019 | [TypeScript en Modo Estricto](nest/ADR-019-typescript-estricto.md) | Aceptada (implementada) | Lenguaje |
+| 020 | [ORM para Persistencia](nest/ADR-020-orm-persistencia.md) | No aplica | Persistencia |
 | 021 | [Framework de Testing](nest/ADR-021-jest-testing.md) | Aceptada (implementada) | Testing |
 | 022 | [Linter y Formateador](nest/ADR-022-eslint-prettier-husky.md) | Parcialmente aceptada | Calidad |
-| 023 | [Swagger/OpenAPI](nest/ADR-023-swagger-openapi.md) | Pendiente | Documentacion |
+| 023 | [Swagger/OpenAPI](nest/ADR-023-swagger-openapi.md) | Aceptada (implementada) | Documentacion |
 | 024 | [NestJS 12 como Framework Backend](nest/ADR-024-nestjs-framework.md) | Aceptada (implementada) | Framework |
 | 025 | [Tres Paquetes NestJS en Lugar de Once](nest/ADR-025-tres-paquetes-en-lugar-de-once.md) | Aceptada | Arquitectura |
+| 026 | [Generador de Servicio y Reglas de Arquitectura](nest/ADR-026-generador-de-servicio-y-reglas-de-arquitectura.md) | Aceptada (implementada) | Arquitectura |
 
 ADR-021 se cerró el 2026-09-06 en Vitest y está publicado en `@ahincho/nova-nestjs` 0.6.0.
 Con eso ADR-016 dejó de depender de él: la bandera `--experimental-vm-modules` desapareció y el
@@ -88,6 +88,18 @@ disparador de revisión atado a que oxfmt publique su 1.0.
 
 ADR-024 se redactó el 2026-09-06 al subir a NestJS 12, publicado en 0.8.1. El placeholder decía
 «NestJS 10.x» y llevaba dos versiones mayores de atraso.
+
+El 2026-09-07 se cerraron los cuatro placeholders que quedaban. ADR-017 y ADR-019 documentan
+decisiones que ya estaban implementadas desde el primer commit y nunca se habían escrito; se
+redactan ahora porque sus consecuencias dejaron de ser teóricas -la 0.8.0 salió publicada rota
+por una de ellas-. ADR-023 se implementó el mismo día, publicado en 0.12.0.
+
+**ADR-020 se cierra sin elegir.** La pregunta asumía que un servicio NestJS de este stack tiene
+base de datos, y ninguno la tiene por diseño: los BFF y los ACL son sin estado, y la persistencia
+vive en la capa Quarkus. Se reabre si alguna vez un servicio NestJS es dueño de datos.
+
+ADR-026 se agrega el mismo día para el generador de servicio y sus reglas de arquitectura
+ejecutables, que hasta entonces sólo estaban documentadas en el README del paquete.
 
 ## Formato
 
