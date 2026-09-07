@@ -30,7 +30,7 @@ Decisiones aplicables a Java y NestJS.
 | 001 | [Arquitectura del Meta-Framework en 5 Niveles](shared/ADR-001-arquitectura-meta-framework-cinco-niveles.md) | Aceptada | Arquitectura |
 | 004 | [Namespace `pe.edu.nova`](shared/ADR-004-namespace-pe-edu-nova.md) | Aceptada | Estructura |
 | 006 | [Conventional Commits y Semantic Versioning](shared/ADR-006-conventional-commits-y-semantic-versioning.md) | Aceptada | Versioning |
-| 007 | [release-please para Automatizacion de Releases](shared/ADR-007-release-please-para-automatizacion.md) | Aceptada | Versioning |
+| 007 | [release-please para Automatizacion de Releases](shared/ADR-007-release-please-para-automatizacion.md) | Aceptada (solo Java, ver ADR-028) | Versioning |
 | 008 | [GitHub Packages como Registry Principal](shared/ADR-008-github-packages-como-registry-principal.md) | Aceptada | Publishing |
 | 009 | [Estrategia Multi-Registry](shared/ADR-009-estrategia-multi-registry.md) | Aceptada | Publishing |
 | 010 | [GitHub Actions Cache para Build Performance](shared/ADR-010-github-actions-cache-para-build.md) | Aceptada | Performance |
@@ -54,7 +54,7 @@ Decisiones especificas del stack Java (Spring Boot, Quarkus, Micronaut).
 
 ## ADRs de Versioning (`versioning/`)
 
-Decisiones sobre politica de versionado y bump. Actualmente exclusivo del stack Java; NestJS tendra su propio ADR cuando ese stack entre en alcance.
+Decisiones sobre politica de versionado y bump. Exclusivo del stack Java: el ADR propio de NestJS que ADR-018 anunciaba es [ADR-028](nest/ADR-028-changesets-y-versionado-cero-x.md), escrito el 2026-09-07.
 
 | # | ADR | Estado | Tema |
 |---|---|---|---|
@@ -78,6 +78,7 @@ paquetes publicados en `ahincho/nova-nestjs`. **Ya no queda ningun placeholder s
 | 025 | [Tres Paquetes NestJS en Lugar de Once](nest/ADR-025-tres-paquetes-en-lugar-de-once.md) | Aceptada | Arquitectura |
 | 026 | [Generador de Servicio y Reglas de Arquitectura](nest/ADR-026-generador-de-servicio-y-reglas-de-arquitectura.md) | Aceptada (implementada) | Arquitectura |
 | 027 | [Una Imagen de Contenedor para Todos los Servicios](nest/ADR-027-imagen-de-contenedor-compartida.md) | Aceptada (implementada) | Despliegue |
+| 028 | [Changesets y Versionado `0.x` para NestJS](nest/ADR-028-changesets-y-versionado-cero-x.md) | Aceptada (implementada) | Versioning |
 
 ADR-021 se cerró el 2026-09-06 en Vitest y está publicado en `@ahincho/nova-nestjs` 0.6.0.
 Con eso ADR-016 dejó de depender de él: la bandera `--experimental-vm-modules` desapareció y el
@@ -98,6 +99,13 @@ por una de ellas-. ADR-023 se implementó el mismo día, publicado en 0.12.0.
 **ADR-020 se cierra sin elegir.** La pregunta asumía que un servicio NestJS de este stack tiene
 base de datos, y ninguno la tiene por diseño: los BFF y los ACL son sin estado, y la persistencia
 vive en la capa Quarkus. Se reabre si alguna vez un servicio NestJS es dueño de datos.
+
+ADR-028 se escribió el 2026-09-07 al revisar el estado del stack antes de publicar la 0.14.0.
+No documenta una decisión nueva: Changesets y `0.x` estaban vivos desde el primer commit y no
+los había escrito nadie. Lo que sí corrige es que ADR-007 reclamaba alcance sobre NestJS y
+ADR-018 anunciaba un ADR que nunca llegó, así que los dos describían el stack de una forma que
+no coincidía con el código. **Un ADR aceptado que dice algo falso se lee como norma**, y ese es
+el motivo de cerrarlo antes de una publicación y no después.
 
 ADR-026 se agrega el mismo día para el generador de servicio y sus reglas de arquitectura
 ejecutables, que hasta entonces sólo estaban documentadas en el README del paquete.

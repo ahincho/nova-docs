@@ -2,7 +2,10 @@
 
 ## Estado
 Aceptada (implementada)
-**Scope:** `versioning` (Java exclusivamente; NestJS tendra su propio ADR)
+**Scope:** `versioning` (Java exclusivamente)
+El ADR propio de NestJS que este documento anunciaba es
+[ADR-028](../nest/ADR-028-changesets-y-versionado-cero-x.md), escrito el 2026-09-07. Entre
+otras cosas, allí se decide **no** aplicar el `1.0.0` inicial que se fija más abajo.
 
 ## Fecha
 2026-07-09

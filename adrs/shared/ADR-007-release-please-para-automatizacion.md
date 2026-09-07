@@ -2,7 +2,10 @@
 
 ## Estado
 Aceptada
-**Scope:** `shared` (Java + NestJS)
+**Scope:** `shared` (Java)
+**Acotada por [ADR-028](../nest/ADR-028-changesets-y-versionado-cero-x.md)** el 2026-09-07:
+el stack NestJS entró en alcance publicando con Changesets y nunca usó release-please. El
+alcance original decía «Java + NestJS», escrito cuando NestJS todavía no existía como stack.
 
 ## Fecha
 2026-07-08
