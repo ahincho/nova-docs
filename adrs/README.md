@@ -77,6 +77,7 @@ paquetes publicados en `ahincho/nova-nestjs`. **Ya no queda ningun placeholder s
 | 024 | [NestJS 12 como Framework Backend](nest/ADR-024-nestjs-framework.md) | Aceptada (implementada) | Framework |
 | 025 | [Tres Paquetes NestJS en Lugar de Once](nest/ADR-025-tres-paquetes-en-lugar-de-once.md) | Aceptada | Arquitectura |
 | 026 | [Generador de Servicio y Reglas de Arquitectura](nest/ADR-026-generador-de-servicio-y-reglas-de-arquitectura.md) | Aceptada (implementada) | Arquitectura |
+| 027 | [Una Imagen de Contenedor para Todos los Servicios](nest/ADR-027-imagen-de-contenedor-compartida.md) | Aceptada (implementada) | Despliegue |
 
 ADR-021 se cerró el 2026-09-06 en Vitest y está publicado en `@ahincho/nova-nestjs` 0.6.0.
 Con eso ADR-016 dejó de depender de él: la bandera `--experimental-vm-modules` desapareció y el

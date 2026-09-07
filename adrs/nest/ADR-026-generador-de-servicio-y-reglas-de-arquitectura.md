@@ -31,7 +31,7 @@ archivo ejecutable.**
 pnpm exec schematics @ahincho/nova-nestjs-schematics:service academic-acl --style acl
 ```
 
-Deja 18 archivos y un servicio que pasa `nova verify` en limpio, en dos sabores: `acl` -hexagonal
+Deja 19 archivos y un servicio que pasa `nova verify` en limpio, en dos sabores: `acl` -hexagonal
 por contexto acotado- y `bff` -features con los adaptadores de salida compartidos en
 `src/upstream/`-.
 
